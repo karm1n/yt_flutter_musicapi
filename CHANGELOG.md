@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0]
+
+### Fixed
+
+- Stream Cancellation: Implemented proper cancellation handling for all stream operations (search, related songs, artist songs, song details)
+
+- Coroutine Management: Added isActive checks before processing each stream item
+
+- Resource Cleanup: Enhanced onCancel methods to properly clean up resources
+
+- Error Handling: Improved error reporting for cancelled operations
+
+- Clean up event sinks properly
+
 ## [3.0.0]
 
 ### Added

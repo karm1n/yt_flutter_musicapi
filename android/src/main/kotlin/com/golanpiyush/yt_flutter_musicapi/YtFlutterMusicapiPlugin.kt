@@ -79,6 +79,8 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler {
     private lateinit var searchStreamChannel: EventChannel
     private lateinit var relatedSongsStreamChannel: EventChannel
     private lateinit var artistSongsStreamChannel: EventChannel
+    private lateinit var songDetailsStreamChannel: EventChannel
+
     
     // Performance optimizations
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -98,256 +100,394 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler {
         // Initialize all event channels
         searchStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/searchStream")
         relatedSongsStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/relatedSongsStream")
+        songDetailsStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/songDetailsStream")
         artistSongsStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/artistSongsStream")
 
         // Set up stream handlers
         searchStreamChannel.setStreamHandler(SearchStreamHandler())
         relatedSongsStreamChannel.setStreamHandler(RelatedSongsStreamHandler())
+        songDetailsStreamChannel.setStreamHandler(SongDetailsStreamHandler())
         artistSongsStreamChannel.setStreamHandler(ArtistSongsStreamHandler())
     }
 
     inner class SearchStreamHandler : EventChannel.StreamHandler {
-        private var eventSink: EventChannel.EventSink? = null
-        private var job: Job? = null
+            private var eventSink: EventChannel.EventSink? = null
+            private var job: Job? = null
 
-        override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-            eventSink = events
-            job = coroutineScope.launch {
-                try {
-                    val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
-                    val query = args["query"] as? String ?: throw IllegalArgumentException("Query is required")
-                    val limit = args["limit"] as? Int ?: 10
-                    val thumbQuality = args["thumbQuality"] as? String ?: "HIGH"
-                    val audioQuality = args["audioQuality"] as? String ?: "HIGH"
-                    val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
-                    val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                job?.cancel("New search request received")
+                eventSink = events
+                
+                job = coroutineScope.launch {
+                    try {
+                        val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
+                        val query = args["query"] as? String ?: throw IllegalArgumentException("Query is required")
+                        val limit = args["limit"] as? Int ?: 10
+                        val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                        val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                        val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                        val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
 
-                    if (musicSearcher == null) {
-                        throw IllegalStateException("Music searcher not initialized")
-                    }
-
-                    val generator = musicSearcher!!.callAttr(
-                        "get_music_details",
-                        query,
-                        limit,
-                        getPythonThumbnailQuality(thumbQuality),
-                        getPythonAudioQuality(audioQuality),
-                        includeAudioUrl,
-                        includeAlbumArt
-                    )
-
-                    var itemCount = 0
-                    val iterator = generator.callAttr("__iter__")
-
-                    while (isActive && itemCount < limit) {
-                        try {
-                            val item = iterator.callAttr("__next__")
-                            val songData = convertPythonDictToMap(item)
-                            
-                            val result = mapOf(
-                                "title" to (songData["title"]?.toString() ?: "Unknown"),
-                                "artists" to (songData["artists"]?.toString() ?: "Unknown"),
-                                "videoId" to (songData["videoId"]?.toString() ?: ""),
-                                "duration" to songData["duration"]?.toString(),
-                                "year" to songData["year"]?.toString(),
-                                "albumArt" to songData["albumArt"]?.toString(),
-                                "audioUrl" to songData["audioUrl"]?.toString()
-                            )
-                            
-                            withContext(Dispatchers.Main) {
-                                events?.success(result)
-                            }
-                            
-                            itemCount++
-                            delay(50)
-                            
-                        } catch (e: Exception) {
-                            if (e.message?.contains("StopIteration") == true) break
-                            Log.e(TAG, "Error processing search result", e)
+                        if (musicSearcher == null) {
+                            throw IllegalStateException("Music searcher not initialized")
                         }
-                    }
 
-                    withContext(Dispatchers.Main) {
-                        events?.endOfStream()
-                    }
-                    
-                } catch (e: Exception) {
-                    Log.e(TAG, "Search stream error", e)
-                    withContext(Dispatchers.Main) {
-                        events?.error("STREAM_ERROR", e.message, null)
+                        val generator = musicSearcher!!.callAttr(
+                            "get_music_details",
+                            query,
+                            limit,
+                            getPythonThumbnailQuality(thumbQuality),
+                            getPythonAudioQuality(audioQuality),
+                            includeAudioUrl,
+                            includeAlbumArt
+                        )
+
+                        var itemCount = 0
+                        val iterator = generator.callAttr("__iter__")
+
+                        while (isActive && itemCount < limit) {
+                            try {
+                                if (!isActive) break
+                                
+                                val item = iterator.callAttr("__next__")
+                                val songData = convertPythonDictToMap(item)
+                                
+                                val result = mapOf(
+                                    "title" to (songData["title"]?.toString() ?: "Unknown"),
+                                    "artists" to (songData["artists"]?.toString() ?: "Unknown"),
+                                    "videoId" to (songData["videoId"]?.toString() ?: ""),
+                                    "duration" to songData["duration"]?.toString(),
+                                    "year" to songData["year"]?.toString(),
+                                    "albumArt" to songData["albumArt"]?.toString(),
+                                    "audioUrl" to songData["audioUrl"]?.toString()
+                                )
+                                
+                                if (isActive) {
+                                    withContext(Dispatchers.Main) {
+                                        events?.success(result)
+                                    }
+                                }
+                                
+                                itemCount++
+                                delay(50)
+                                
+                            } catch (e: Exception) {
+                                if (!isActive) break
+                                if (e.message?.contains("StopIteration") == true) break
+                                Log.e(TAG, "Error processing search result", e)
+                            }
+                        }
+
+                        if (isActive) {
+                            withContext(Dispatchers.Main) {
+                                events?.endOfStream()
+                            }
+                        }
+                        
+                    } catch (e: Exception) {
+                        if (!isActive) return@launch
+                        Log.e(TAG, "Search stream error", e)
+                        withContext(Dispatchers.Main) {
+                            events?.error("STREAM_ERROR", e.message, null)
+                        }
                     }
                 }
             }
-        }
 
-        override fun onCancel(arguments: Any?) {
-            job?.cancel()
-            eventSink = null
-        }
+            override fun onCancel(arguments: Any?) {
+                job?.cancel("Search stream cancelled")
+                eventSink = null
+            }
     }
 
     inner class RelatedSongsStreamHandler : EventChannel.StreamHandler {
-        private var eventSink: EventChannel.EventSink? = null
-        private var job: Job? = null
+            private var eventSink: EventChannel.EventSink? = null
+            private var job: Job? = null
 
-        override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-            eventSink = events
-            job = coroutineScope.launch {
-                try {
-                    val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
-                    val songName = args["songName"] as? String ?: throw IllegalArgumentException("Song name is required")
-                    val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name is required")
-                    val limit = args["limit"] as? Int ?: 10
-                    val thumbQuality = args["thumbQuality"] as? String ?: "HIGH"
-                    val audioQuality = args["audioQuality"] as? String ?: "HIGH"
-                    val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
-                    val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                job?.cancel("New related songs request received")
+                eventSink = events
+                
+                job = coroutineScope.launch {
+                    try {
+                        val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
+                        val songName = args["songName"] as? String ?: throw IllegalArgumentException("Song name is required")
+                        val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name is required")
+                        val limit = args["limit"] as? Int ?: 10
+                        val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                        val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                        val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                        val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
 
-                    if (relatedFetcher == null) {
-                        throw IllegalStateException("Related fetcher not initialized")
-                    }
-
-                    val generator = relatedFetcher!!.callAttr(
-                        "getRelated",
-                        songName,
-                        artistName,
-                        limit,
-                        getPythonThumbnailQuality(thumbQuality),
-                        getPythonAudioQuality(audioQuality),
-                        includeAudioUrl,
-                        includeAlbumArt
-                    )
-
-                    var itemCount = 0
-                    val iterator = generator.callAttr("__iter__")
-
-                    while (isActive && itemCount < limit) {
-                        try {
-                            val item = iterator.callAttr("__next__")
-                            val songData = convertPythonDictToMap(item)
-                            
-                            val result = mapOf(
-                                "title" to (songData["title"]?.toString() ?: "Unknown"),
-                                "artists" to (songData["artists"]?.toString() ?: "Unknown"),
-                                "videoId" to (songData["videoId"]?.toString() ?: ""),
-                                "duration" to songData["duration"]?.toString(),
-                                "albumArt" to songData["albumArt"]?.toString(),
-                                "audioUrl" to songData["audioUrl"]?.toString(),
-                                "isOriginal" to songData["isOriginal"]?.toString().toBoolean()
-                            )
-                            
-                            withContext(Dispatchers.Main) {
-                                events?.success(result)
-                            }
-                            
-                            itemCount++
-                            delay(50)
-                            
-                        } catch (e: Exception) {
-                            if (e.message?.contains("StopIteration") == true) break
-                            Log.e(TAG, "Error processing related song", e)
+                        if (relatedFetcher == null) {
+                            throw IllegalStateException("Related fetcher not initialized")
                         }
-                    }
 
-                    withContext(Dispatchers.Main) {
-                        events?.endOfStream()
-                    }
-                    
-                } catch (e: Exception) {
-                    Log.e(TAG, "Related songs stream error", e)
-                    withContext(Dispatchers.Main) {
-                        events?.error("STREAM_ERROR", e.message, null)
+                        val generator = relatedFetcher!!.callAttr(
+                            "getRelated",
+                            songName,
+                            artistName,
+                            limit,
+                            getPythonThumbnailQuality(thumbQuality),
+                            getPythonAudioQuality(audioQuality),
+                            includeAudioUrl,
+                            includeAlbumArt
+                        )
+
+                        var itemCount = 0
+                        val iterator = generator.callAttr("__iter__")
+
+                        while (isActive && itemCount < limit) {
+                            try {
+                                if (!isActive) break
+                                
+                                val item = iterator.callAttr("__next__")
+                                val songData = convertPythonDictToMap(item)
+                                
+                                val result = mapOf(
+                                    "title" to (songData["title"]?.toString() ?: "Unknown"),
+                                    "artists" to (songData["artists"]?.toString() ?: "Unknown"),
+                                    "videoId" to (songData["videoId"]?.toString() ?: ""),
+                                    "duration" to songData["duration"]?.toString(),
+                                    "albumArt" to songData["albumArt"]?.toString(),
+                                    "audioUrl" to songData["audioUrl"]?.toString(),
+                                    "isOriginal" to songData["isOriginal"]?.toString().toBoolean()
+                                )
+                                
+                                if (isActive) {
+                                    withContext(Dispatchers.Main) {
+                                        events?.success(result)
+                                    }
+                                }
+                                
+                                itemCount++
+                                delay(50)
+                                
+                            } catch (e: Exception) {
+                                if (!isActive) break
+                                if (e.message?.contains("StopIteration") == true) break
+                                Log.e(TAG, "Error processing related song", e)
+                            }
+                        }
+
+                        if (isActive) {
+                            withContext(Dispatchers.Main) {
+                                events?.endOfStream()
+                            }
+                        }
+                        
+                    } catch (e: Exception) {
+                        if (!isActive) return@launch
+                        Log.e(TAG, "Related songs stream error", e)
+                        withContext(Dispatchers.Main) {
+                            events?.error("STREAM_ERROR", e.message, null)
+                        }
                     }
                 }
             }
-        }
 
-        override fun onCancel(arguments: Any?) {
-            job?.cancel()
-            eventSink = null
-        }
+            override fun onCancel(arguments: Any?) {
+                job?.cancel("Related songs stream cancelled")
+                eventSink = null
+            }
+    }
+
+
+    inner class SongDetailsStreamHandler : EventChannel.StreamHandler {
+            private var eventSink: EventChannel.EventSink? = null
+            private var job: Job? = null
+
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                job?.cancel("New song details request received")
+                eventSink = events
+                
+                job = coroutineScope.launch {
+                    try {
+                        val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
+                        val songs = args["songs"] as? List<Map<String, String>> 
+                            ?: throw IllegalArgumentException("Songs list is required")
+                        
+                        val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                        val audioQuality = args["audioQuality"] as? String ?: "VERY_HIGH"
+                        val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                        val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+
+                        if (musicSearcher == null) {
+                            throw IllegalStateException("Music searcher not initialized")
+                        }
+
+                        val pythonThumbQuality = getPythonThumbnailQuality(thumbQuality)
+                        val pythonAudioQuality = getPythonAudioQuality(audioQuality)
+
+                        val pySongs = python?.getBuiltins()?.callAttr("list") 
+                            ?: throw IllegalStateException("Python builtins not available")
+                        
+                        for (song in songs) {
+                            val pySong = python?.getBuiltins()?.callAttr("dict") ?: continue
+                            pySong.callAttr("__setitem__", "song_name", song["song_name"] ?: "")
+                            pySong.callAttr("__setitem__", "artist_name", song["artist_name"] ?: "")
+                            pySongs.callAttr("append", pySong)
+                        }
+
+                        val generator = musicSearcher!!.callAttr(
+                            "stream_song_details",
+                            pySongs,
+                            pythonThumbQuality,
+                            pythonAudioQuality,
+                            includeAudioUrl,
+                            includeAlbumArt
+                        )
+
+                        val iterator = generator.callAttr("__iter__")
+                        var hasNext = true
+
+                        while (isActive && hasNext) {
+                            try {
+                                if (!isActive) break
+                                
+                                val item = iterator.callAttr("__next__")
+                                val itemMap = convertPythonDictToMap(item)
+                                
+                                if (isActive) {
+                                    withContext(Dispatchers.Main) {
+                                        if (itemMap.containsKey("error")) {
+                                            events?.success(mapOf(
+                                                "error" to itemMap["error"],
+                                                "success" to false
+                                            ))
+                                        } else {
+                                            events?.success(itemMap)
+                                        }
+                                    }
+                                }
+                                
+                                delay(50)
+                                
+                            } catch (e: Exception) {
+                                if (!isActive) break
+                                if (e.message?.contains("StopIteration") == true) {
+                                    hasNext = false
+                                } else {
+                                    Log.e(TAG, "Error processing song detail", e)
+                                    withContext(Dispatchers.Main) {
+                                        events?.error("STREAM_ERROR", e.message, null)
+                                    }
+                                    break
+                                }
+                            }
+                        }
+
+                        if (isActive) {
+                            withContext(Dispatchers.Main) {
+                                events?.endOfStream()
+                            }
+                        }
+                        
+                    } catch (e: Exception) {
+                        if (!isActive) return@launch
+                        Log.e(TAG, "Song details stream error", e)
+                        withContext(Dispatchers.Main) {
+                            events?.error("STREAM_ERROR", e.message, null)
+                        }
+                    }
+                }
+            }
+
+            override fun onCancel(arguments: Any?) {
+                job?.cancel("Song details stream cancelled")
+                eventSink = null
+            }
     }
 
     inner class ArtistSongsStreamHandler : EventChannel.StreamHandler {
-        private var eventSink: EventChannel.EventSink? = null
-        private var job: Job? = null
+            private var eventSink: EventChannel.EventSink? = null
+            private var job: Job? = null
 
-        override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-            eventSink = events
-            job = coroutineScope.launch {
-                try {
-                    val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
-                    val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name is required")
-                    val limit = args["limit"] as? Int ?: 25
-                    val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
-                    val audioQuality = args["audioQuality"] as? String ?: "HIGH"
-                    val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
-                    val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                job?.cancel("New artist songs request received")
+                eventSink = events
+                
+                job = coroutineScope.launch {
+                    try {
+                        val args = arguments as? Map<*, *> ?: throw IllegalArgumentException("Invalid arguments format")
+                        val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name is required")
+                        val limit = args["limit"] as? Int ?: 25
+                        val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                        val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                        val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                        val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
 
-                    if (musicSearcher == null) {
-                        throw IllegalStateException("Music searcher not initialized")
-                    }
-
-                    val generator = musicSearcher!!.callAttr(
-                        "get_artist_songs",
-                        artistName,
-                        limit,
-                        thumbQuality,
-                        audioQuality,
-                        includeAudioUrl,
-                        includeAlbumArt
-                    )
-
-                    var itemCount = 0
-                    val iterator = generator.callAttr("__iter__")
-
-                    while (isActive && itemCount < limit) {
-                        try {
-                            val item = iterator.callAttr("__next__")
-                            val songData = convertPythonDictToMap(item)
-                            
-                            val result = mapOf(
-                                "title" to (songData["title"]?.toString() ?: "Unknown"),
-                                "artists" to (songData["artists"]?.toString() ?: "Unknown"),
-                                "videoId" to (songData["videoId"]?.toString() ?: ""),
-                                "duration" to songData["duration"]?.toString(),
-                                "albumArt" to songData["albumArt"]?.toString(),
-                                "audioUrl" to songData["audioUrl"]?.toString(),
-                                "artistName" to artistName
-                            )
-                            
-                            withContext(Dispatchers.Main) {
-                                events?.success(result)
-                            }
-                            
-                            itemCount++
-                            delay(50)
-                            
-                        } catch (e: Exception) {
-                            if (e.message?.contains("StopIteration") == true) break
-                            Log.e(TAG, "Error processing artist song", e)
+                        if (musicSearcher == null) {
+                            throw IllegalStateException("Music searcher not initialized")
                         }
-                    }
 
-                    withContext(Dispatchers.Main) {
-                        events?.endOfStream()
-                    }
-                    
-                } catch (e: Exception) {
-                    Log.e(TAG, "Artist songs stream error", e)
-                    withContext(Dispatchers.Main) {
-                        events?.error("STREAM_ERROR", e.message, null)
+                        val generator = musicSearcher!!.callAttr(
+                            "get_artist_songs",
+                            artistName,
+                            limit,
+                            thumbQuality,
+                            audioQuality,
+                            includeAudioUrl,
+                            includeAlbumArt
+                        )
+
+                        var itemCount = 0
+                        val iterator = generator.callAttr("__iter__")
+
+                        while (isActive && itemCount < limit) {
+                            try {
+                                if (!isActive) break
+                                
+                                val item = iterator.callAttr("__next__")
+                                val songData = convertPythonDictToMap(item)
+                                
+                                val result = mapOf(
+                                    "title" to (songData["title"]?.toString() ?: "Unknown"),
+                                    "artists" to (songData["artists"]?.toString() ?: "Unknown"),
+                                    "videoId" to (songData["videoId"]?.toString() ?: ""),
+                                    "duration" to songData["duration"]?.toString(),
+                                    "albumArt" to songData["albumArt"]?.toString(),
+                                    "audioUrl" to songData["audioUrl"]?.toString(),
+                                    "artistName" to artistName
+                                )
+                                
+                                if (isActive) {
+                                    withContext(Dispatchers.Main) {
+                                        events?.success(result)
+                                    }
+                                }
+                                
+                                itemCount++
+                                delay(50)
+                                
+                            } catch (e: Exception) {
+                                if (!isActive) break
+                                if (e.message?.contains("StopIteration") == true) break
+                                Log.e(TAG, "Error processing artist song", e)
+                            }
+                        }
+
+                        if (isActive) {
+                            withContext(Dispatchers.Main) {
+                                events?.endOfStream()
+                            }
+                        }
+                        
+                    } catch (e: Exception) {
+                        if (!isActive) return@launch
+                        Log.e(TAG, "Artist songs stream error", e)
+                        withContext(Dispatchers.Main) {
+                            events?.error("STREAM_ERROR", e.message, null)
+                        }
                     }
                 }
             }
-        }
 
-        override fun onCancel(arguments: Any?) {
-            job?.cancel()
-            eventSink = null
-        }
+            override fun onCancel(arguments: Any?) {
+                job?.cancel("Artist songs stream cancelled")
+                eventSink = null
+            }
     }
-
 
 
 
@@ -648,7 +788,7 @@ private fun handleGetSongDetails(call: MethodCall, result: Result) {
             val songs = call.argument<List<Map<String, String>>>("songs")
                 ?: throw IllegalArgumentException("Songs list is required")
             
-            val mode = call.argument<String>("mode") ?: "batch"
+            val mode = call.argument<String>("mode")?.lowercase() ?: "batch"
             val thumbQuality = call.argument<String>("thumbQuality") ?: "VERY_HIGH"
             val audioQuality = call.argument<String>("audioQuality") ?: "VERY_HIGH"
             val includeAudioUrl = call.argument<Boolean>("includeAudioUrl") ?: true
@@ -669,8 +809,8 @@ private fun handleGetSongDetails(call: MethodCall, result: Result) {
             
             for (song in songs) {
                 val pySong = python?.getBuiltins()?.callAttr("dict") ?: continue
-                pySong.callAttr("__setitem__", "song_name", song["song_name"])
-                pySong.callAttr("__setitem__", "artist_name", song["artist_name"])
+                pySong.callAttr("__setitem__", "song_name", song["song_name"] ?: "")
+                pySong.callAttr("__setitem__", "artist_name", song["artist_name"] ?: "")
                 pySongs.callAttr("append", pySong)
             }
             
@@ -686,17 +826,25 @@ private fun handleGetSongDetails(call: MethodCall, result: Result) {
             )
             
             // Process results based on mode
-            when (mode.lowercase()) {
+            when (mode) {
                 "single" -> {
                     // Single mode - returns a single dictionary
                     val songData = convertPythonDictToMap(pythonResult)
                     
                     withContext(Dispatchers.Main) {
-                        result.success(mapOf(
-                            "success" to true,
-                            "data" to songData,
-                            "mode" to "single"
-                        ))
+                        if (songData.isNotEmpty()) {
+                            result.success(mapOf(
+                                "success" to true,
+                                "data" to songData,
+                                "mode" to "single"
+                            ))
+                        } else {
+                            result.error(
+                                "NO_RESULTS", 
+                                "No song details found", 
+                                mapOf("success" to false)
+                            )
+                        }
                     }
                 }
                 else -> {
@@ -704,66 +852,68 @@ private fun handleGetSongDetails(call: MethodCall, result: Result) {
                     val resultList = mutableListOf<Map<String, Any?>>()
                     
                     try {
-                        // Convert generator to list by consuming it
-                        val pythonList = python?.getBuiltins()?.callAttr("list", pythonResult)
+                        // Get iterator from generator
+                        val iterator = pythonResult.callAttr("__iter__")
+                        var hasNext = true
                         
-                        if (pythonList != null) {
-                            val size = pythonList.callAttr("__len__").toInt()
-                            Log.d(TAG, "Generator produced $size results")
-                            
-                            for (i in 0 until size) {
-                                try {
-                                    val item = pythonList.callAttr("__getitem__", i)
-                                    resultList.add(convertPythonDictToMap(item))
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Error processing item $i", e)
+                        while (hasNext) {
+                            try {
+                                val item = iterator.callAttr("__next__")
+                                val itemMap = convertPythonDictToMap(item)
+                                
+                                // Handle both success and error cases from Python
+                                if (itemMap.containsKey("error")) {
+                                    resultList.add(mapOf(
+                                        "error" to itemMap["error"],
+                                        "success" to false
+                                    ))
+                                } else {
+                                    resultList.add(itemMap)
+                                }
+                                Log.d(TAG, "Processed batch item: ${itemMap["title"]}")
+                            } catch (e: Exception) {
+                                if (e.message?.contains("StopIteration") == true) {
+                                    hasNext = false
+                                } else {
+                                    Log.e(TAG, "Error processing batch item", e)
+                                    resultList.add(mapOf(
+                                        "error" to e.message,
+                                        "success" to false
+                                    ))
                                 }
                             }
+                        }
+                        
+                        withContext(Dispatchers.Main) {
+                            result.success(mapOf(
+                                "success" to true,
+                                "data" to resultList,
+                                "mode" to "batch",
+                                "count" to resultList.size,
+                                "processed" to resultList.count { it["success"] != false },
+                                "errors" to resultList.count { it["success"] == false }
+                            ))
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error consuming generator", e)
-                        // Fallback: try to iterate directly if it's iterable
-                        try {
-                            val iterator = pythonResult.callAttr("__iter__")
-                            var index = 0
-                            
-                            while (true) {
-                                try {
-                                    val item = iterator.callAttr("__next__")
-                                    resultList.add(convertPythonDictToMap(item))
-                                    index++
-                                    Log.d(TAG, "Processed item $index from generator")
-                                } catch (stopIteration: Exception) {
-                                    // StopIteration exception means we've reached the end
-                                    if (stopIteration.message?.contains("StopIteration") == true) {
-                                        Log.d(TAG, "Generator exhausted after $index items")
-                                        break
-                                    } else {
-                                        Log.e(TAG, "Error iterating generator at item $index", stopIteration)
-                                        break
-                                    }
-                                }
-                            }
-                        } catch (iterException: Exception) {
-                            Log.e(TAG, "Failed to iterate generator directly", iterException)
+                        withContext(Dispatchers.Main) {
+                            result.error(
+                                "BATCH_ERROR", 
+                                "Error processing batch: ${e.message}", 
+                                null
+                            )
                         }
-                    }
-                    
-                    withContext(Dispatchers.Main) {
-                        result.success(mapOf(
-                            "success" to true,
-                            "data" to resultList,
-                            "mode" to "batch",
-                            "count" to resultList.size
-                        ))
                     }
                 }
             }
-            
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get song details", e)
             withContext(Dispatchers.Main) {
-                result.error("SONG_DETAILS_ERROR", "Failed to get song details: ${e.message}", null)
+                result.error(
+                    "SONG_DETAILS_ERROR", 
+                    "Failed to get song details: ${e.message}", 
+                    null
+                )
             }
         }
     }
@@ -849,6 +999,27 @@ private fun handleGetArtistSongs(call: MethodCall, result: Result) {
         }
     }
 }
+
+private fun handleStartStreamingSongDetails(call: MethodCall, result: Result) {
+    Log.d(TAG, "handleStartStreamingSongDetails called")
+    
+    // Extract arguments and validate
+    val songs = call.argument<List<Map<String, String>>>("songs")
+    if (songs.isNullOrEmpty()) {
+        result.error("INVALID_SONGS", "Songs list is required", null)
+        return
+    }
+    
+    // This method just confirms the call was received
+    // The actual streaming happens in the EventChannel.StreamHandler
+    result.success(mapOf(
+        "started" to true,
+        "message" to "Streaming song details will start when EventChannel is listened to",
+        "count" to songs.size
+    ))
+}
+
+
 // // Update the handleGetLyrics function to provide better error handling
 // private fun handleGetLyrics(call: MethodCall, result: Result) {
 //     coroutineScope.launch {

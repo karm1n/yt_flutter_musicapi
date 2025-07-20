@@ -582,25 +582,59 @@ class YTMusicSearcher:
             try:
                 results = self.ytmusic.search(query, filter="songs", limit=5)
                 
-                # Find best matching song
-                for item in results:
-                    title = item.get("title", "").lower()
-                    artists = [a.get("name", "").lower() for a in item.get("artists", [])]
+                if not results:
+                    print("❌ No results found for query")
+                    return None
                     
-                    # Match both song name and artist
-                    if (all(word in title for word in song_name.lower().split()) and 
-                        any(artist_name.lower() in artist for artist in artists)):
-                        video_id = item.get("videoId")
+                # Find best matching song using string matching
+                best_match = None
+                best_score = 0
+                
+                # Pre-process search terms
+                search_song = song_name.lower().strip()
+                search_artist = artist_name.lower().strip()
+                
+                for item in results:
+                    title = item.get("title", "").lower().strip()
+                    artists = [a.get("name", "").lower().strip() for a in item.get("artists", [])]
+                    
+                    # Calculate title match (check if search term is in title)
+                    title_match = 100 if search_song in title else 0
+                    
+                    # Calculate artist match (check if any artist matches)
+                    artist_match = 100 if any(
+                        search_artist in artist for artist in artists
+                    ) else 0
+                    
+                    # Simple scoring - prioritize exact matches
+                    if title_match == 100 and artist_match == 100:
+                        # Perfect match found, use it immediately
                         song_data = item
+                        video_id = item.get("videoId")
                         break
+                        
+                    # Otherwise calculate partial score
+                    total_score = (title_match * 0.6) + (artist_match * 0.4)
+                    
+                    if total_score > best_score:
+                        best_score = total_score
+                        best_match = item
                 
-                # If no exact match found, use first result
-                if not video_id and results:
-                    video_id = results[0].get("videoId")
+                if video_id:  # If we found perfect match and broke early
+                    break
+                    
+                # Use best match if we have one, otherwise first result
+                if best_match and best_score > 0:
+                    song_data = best_match
+                    print(f"Using best match (score: {best_score})")
+                else:
                     song_data = results[0]
+                    print("⚠️ Using first result (no good matches found)")
                 
+                video_id = song_data.get("videoId")
                 if video_id:
                     break
+                    
             except Exception as e:
                 print(f"❌ Search attempt {attempt + 1} failed: {e}")
                 if attempt == 2:
@@ -620,20 +654,37 @@ class YTMusicSearcher:
         duration = song_data.get("duration")
         
         # Build song data using unified method
-        result = self._build_song_data(
-            video_id=video_id,
-            title=title,
-            artists=artists,
-            duration=duration,
-            song_data=song_data,
-            thumb_quality=thumb_quality,
-            audio_quality=audio_quality,
-            include_audio_url=include_audio_url,
-            include_album_art=include_album_art
-        )
+        result = {
+            "title": title,
+            "artists": artists,
+            "videoId": video_id,
+            "duration": duration,
+        }
+        
+        # Get album art if requested
+        if include_album_art:
+            try:
+                album_art = self._get_album_art_unified(
+                    video_id, 
+                    song_data, 
+                    thumb_quality
+                )
+                result["albumArt"] = album_art
+            except Exception as e:
+                print(f"❌ Error getting album art: {e}")
+                result["albumArt"] = None
+        
+        # Get audio URL if requested
+        if include_audio_url:
+            try:
+                audio_url = self._get_audio_url_with_retries(video_id, audio_quality)
+                result["audioUrl"] = audio_url
+            except Exception as e:
+                print(f"❌ Error getting audio URL: {e}")
+                result["audioUrl"] = None
         
         return result
-    
+        
     def _process_batch_songs(
         self,
         songs: List[Dict[str, str]],
@@ -643,15 +694,22 @@ class YTMusicSearcher:
         include_album_art: bool
     ) -> Generator[dict, None, None]:
         """Internal method to process songs in batch mode"""
+        total_songs = len(songs)
+        processed_count = 0
+        success_count = 0
+        
+        print(f"🎶 Starting batch processing of {total_songs} songs")
+        
         for i, song in enumerate(songs, 1):
-            song_name = song.get("song_name", "")
-            artist_name = song.get("artist_name", "")
+            song_name = song.get("song_name", "").strip()
+            artist_name = song.get("artist_name", "").strip()
 
             if not song_name or not artist_name:
                 print(f"⚠️ Skipping item {i}: Missing song_name or artist_name")
                 continue
 
-            print(f"\n🔍 Processing song {i}/{len(songs)}: '{song_name}' by '{artist_name}'")
+            print(f"\n🔍 Processing song {i}/{total_songs}: '{song_name}' by '{artist_name}'")
+            processed_count += 1
 
             try:
                 details = self._get_single_song_details(
@@ -664,18 +722,111 @@ class YTMusicSearcher:
                 )
 
                 if details:
+                    success_count += 1
+                    print(f"✅ Successfully processed song {i}")
                     yield details
                 else:
                     print(f"❌ Song not found: '{song_name}' by '{artist_name}'")
+                    yield {
+                        "error": f"Song not found: '{song_name}'",
+                        "success": False,
+                        "song_name": song_name,
+                        "artist_name": artist_name
+                    }
 
             except Exception as e:
                 print(f"❌ Error processing song '{song_name}': {str(e)}")
-                continue
+                yield {
+                    "error": str(e),
+                    "success": False,
+                    "song_name": song_name,
+                    "artist_name": artist_name
+                }
 
             # Small delay between songs to avoid rate limiting
-            time.sleep(0.5)
+            if i < total_songs:
+                time.sleep(0.5)
 
-        print("✅ Batch processing completed")
+        print(f"✅ Batch processing completed. Success: {success_count}/{processed_count}")
+
+    def stream_song_details(
+            self,
+            songs: List[Dict[str, str]],
+            thumb_quality: ThumbnailQuality = ThumbnailQuality.VERY_HIGH,
+            audio_quality: AudioQuality = AudioQuality.VERY_HIGH,
+            include_audio_url: bool = True,
+            include_album_art: bool = True
+        ) -> Generator[dict, None, None]:
+            """Stream song details one by one with progress updates"""
+            total_songs = len(songs)
+            processed_count = 0
+            success_count = 0
+            
+            print(f"🎶 Starting streaming of {total_songs} songs")
+            
+            for i, song in enumerate(songs, 1):
+                song_name = song.get("song_name", "").strip()
+                artist_name = song.get("artist_name", "").strip()
+
+                if not song_name or not artist_name:
+                    print(f"⚠️ Skipping item {i}: Missing song_name or artist_name")
+                    yield {
+                        "error": "Missing song_name or artist_name",
+                        "success": False,
+                        "song_name": song_name,
+                        "artist_name": artist_name
+                    }
+                    continue
+
+                print(f"\n🔍 Processing song {i}/{total_songs}: '{song_name}' by '{artist_name}'")
+                processed_count += 1
+
+                try:
+                    details = self._get_single_song_details(
+                        song_name=song_name,
+                        artist_name=artist_name,
+                        thumb_quality=thumb_quality,
+                        audio_quality=audio_quality,
+                        include_audio_url=include_audio_url,
+                        include_album_art=include_album_art
+                    )
+
+                    if details:
+                        success_count += 1
+                        print(f"✅ Successfully processed song {i}")
+                        yield {
+                            **details,
+                            "success": True,
+                            "processed": processed_count,
+                            "total": total_songs
+                        }
+                    else:
+                        print(f"❌ Song not found: '{song_name}' by '{artist_name}'")
+                        yield {
+                            "error": f"Song not found: '{song_name}'",
+                            "success": False,
+                            "song_name": song_name,
+                            "artist_name": artist_name,
+                            "processed": processed_count,
+                            "total": total_songs
+                        }
+
+                except Exception as e:
+                    print(f"❌ Error processing song '{song_name}': {str(e)}")
+                    yield {
+                        "error": str(e),
+                        "success": False,
+                        "song_name": song_name,
+                        "artist_name": artist_name,
+                        "processed": processed_count,
+                        "total": total_songs
+                    }
+
+                # Small delay between songs to avoid rate limiting
+                if i < total_songs:
+                    time.sleep(0.5)
+
+            print(f"✅ Streaming completed. Success: {success_count}/{processed_count}")
 
     def get_artist_songs(
         self,

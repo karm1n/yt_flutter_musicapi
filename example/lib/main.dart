@@ -715,82 +715,126 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
     _addToCliOutput(
       '📊 Settings: Mode=${AppSettings.mode}, Audio=${AppSettings.audioQuality.value}, Thumb=${AppSettings.thumbnailQuality.value}',
     );
-    _addToCliOutput('📋 Test songs: ${AppSettings.testSongs.length} songs');
-
-    for (int i = 0; i < AppSettings.testSongs.length; i++) {
-      final song = AppSettings.testSongs[i];
-      _addToCliOutput('   ${i + 1}. "${song['title']}" by ${song['artist']}');
-    }
 
     try {
-      final response = await _api.getSongDetails(
-        songs: AppSettings.testSongs,
-        mode: AppSettings.mode == 'batch' ? 'batch' : 'single',
-        audioQuality: AppSettings.audioQuality,
-        thumbQuality: AppSettings.thumbnailQuality,
-        includeAudioUrl: true,
-        includeAlbumArt: true,
-      );
+      if (AppSettings.mode == 'single') {
+        // Handle single song detail using related song inputs
+        _addToCliOutput('🔍 Getting details for single song:');
+        _addToCliOutput(
+          '   "${AppSettings.relatedSongTitle}" by ${AppSettings.relatedSongArtist}',
+        );
 
-      if (response.success && response.data != null) {
-        _addToCliOutput('✅ Song details retrieved successfully');
+        final response = await _api.getSongDetails(
+          songs: [
+            {
+              'title': AppSettings.relatedSongTitle,
+              'artist': AppSettings.relatedSongArtist,
+            },
+          ],
+          mode: 'single',
+          audioQuality: AppSettings.audioQuality,
+          thumbQuality: AppSettings.thumbnailQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        );
 
-        if (AppSettings.mode != 'batch') {
-          final songDetail = response.data as SongDetail?;
-          if (songDetail != null) {
-            _addToCliOutput('📋 Single song detail retrieved:');
-            _addToCliOutput('🎵 Song Detail:');
-            _addToCliOutput('   Title: ${songDetail.title}');
-            _addToCliOutput('   Artists: ${songDetail.artists}');
-            _addToCliOutput('   Duration: ${songDetail.duration ?? 'N/A'}');
-            _addToCliOutput('   Video ID: ${songDetail.videoId}');
-            _addToCliOutput('   Year: ${songDetail.year ?? 'N/A'}');
-            _addToCliOutput('   Album: ${songDetail.album ?? 'N/A'}');
-            _addToCliOutput(
-              '   Album Art: ${songDetail.albumArt != null ? 'Available' : 'N/A'}',
-            );
-            _addToCliOutput(
-              '   Audio URL: ${songDetail.audioUrl != null ? 'Available' : 'N/A'}',
-            );
-            _addToCliOutput('   ---');
+        if (response.success && response.data != null) {
+          final songDetail = response.data as SongDetail;
+          _addToCliOutput('✅ Song details retrieved successfully');
+          _addToCliOutput('🎵 Song Detail:');
+          _addToCliOutput('   Title: ${songDetail.title}');
+          _addToCliOutput('   Artists: ${songDetail.artists}');
+          _addToCliOutput('   Duration: ${songDetail.duration ?? 'N/A'}');
+          _addToCliOutput('   Video ID: ${songDetail.videoId}');
+          _addToCliOutput('   Year: ${songDetail.year ?? 'N/A'}');
+          _addToCliOutput('   Album: ${songDetail.album ?? 'N/A'}');
+          _addToCliOutput(
+            '   Album Art: ${songDetail.albumArt != null ? 'Available' : 'N/A'}',
+          );
+          _addToCliOutput(
+            '   Audio URL: ${songDetail.audioUrl != null ? 'Available' : 'N/A'}',
+          );
 
-            Inspector.checkSingleSongDetail(
-              songDetail,
-              'Song Details (Single)',
-            );
-          } else {
-            _addToCliOutput('❌ No song detail returned');
-          }
+          Inspector.checkSingleSongDetail(songDetail, 'Song Details (Single)');
         } else {
-          final songDetails = response.data as List<SongDetail>;
-          _addToCliOutput('📋 Found ${songDetails.length} detailed songs');
-
-          for (int i = 0; i < songDetails.length; i++) {
-            final song = songDetails[i];
-            _addToCliOutput('🎵 Song Detail ${i + 1}:');
-            _addToCliOutput('   Title: ${song.title}');
-            _addToCliOutput('   Artists: ${song.artists}');
-            _addToCliOutput('   Duration: ${song.duration ?? 'N/A'}');
-            _addToCliOutput('   Video ID: ${song.videoId}');
-            _addToCliOutput('   Year: ${song.year ?? 'N/A'}');
-            _addToCliOutput('   Album: ${song.album ?? 'N/A'}');
-            _addToCliOutput(
-              '   Album Art: ${song.albumArt != null ? 'Available' : 'N/A'}',
-            );
-            _addToCliOutput(
-              '   Audio URL: ${song.audioUrl != null ? 'Available' : 'N/A'}',
-            );
-            _addToCliOutput('   ---');
-          }
-
-          Inspector.checkRules(songDetails, 'Song Details (Batch)');
+          _addToCliOutput('❌ Failed to get song details');
+          _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
+        }
+      } else {
+        // Handle batch mode with test songs
+        _addToCliOutput(
+          '📋 Processing batch of ${AppSettings.testSongs.length} songs',
+        );
+        for (int i = 0; i < AppSettings.testSongs.length; i++) {
+          final song = AppSettings.testSongs[i];
+          _addToCliOutput(
+            '   ${i + 1}. "${song['title']}" by ${song['artist']}',
+          );
         }
 
-        _addToCliOutput('🎉 SUCCESS: Song details operation completed');
-      } else {
-        _addToCliOutput('❌ Failed to get song details');
-        _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
+        final response = await _api.getSongDetails(
+          songs: AppSettings.testSongs,
+          mode: 'batch',
+          audioQuality: AppSettings.audioQuality,
+          thumbQuality: AppSettings.thumbnailQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        );
+
+        if (response.success) {
+          if (response.data is Map) {
+            final data = response.data as Map<String, dynamic>;
+            final List<SongDetail> songDetails =
+                (data['data'] as List?)?.cast<SongDetail>() ?? [];
+            final errors = (data['errors'] as List?) ?? [];
+            final processed = data['processed'] as int? ?? 0;
+            final errorCount = data['error_count'] as int? ?? 0;
+
+            _addToCliOutput('✅ Batch processing completed');
+            _addToCliOutput('📋 Success: $processed, Errors: $errorCount');
+
+            if (songDetails.isNotEmpty) {
+              _addToCliOutput('🎵 Successfully processed songs:');
+              for (int i = 0; i < songDetails.length; i++) {
+                final song = songDetails[i];
+                _addToCliOutput('   ${i + 1}. ${song.title} - ${song.artists}');
+                _addToCliOutput('      Video ID: ${song.videoId}');
+                _addToCliOutput('      Duration: ${song.duration ?? 'N/A'}');
+              }
+            }
+
+            if (errors.isNotEmpty) {
+              _addToCliOutput('❌ Errors encountered:');
+              for (int i = 0; i < errors.length; i++) {
+                final error = errors[i];
+                _addToCliOutput('   ${i + 1}. ${error['error']}');
+              }
+            }
+
+            Inspector.checkRules(songDetails, 'Song Details (Batch)');
+          } else if (response.data is List) {
+            final songDetails = response.data as List<SongDetail>;
+            _addToCliOutput('✅ Batch processing completed');
+            _addToCliOutput('📋 Success: ${songDetails.length}');
+
+            for (int i = 0; i < songDetails.length; i++) {
+              final song = songDetails[i];
+              _addToCliOutput('   ${i + 1}. ${song.title} - ${song.artists}');
+              _addToCliOutput('      Video ID: ${song.videoId}');
+              _addToCliOutput('      Duration: ${song.duration ?? 'N/A'}');
+            }
+
+            Inspector.checkRules(songDetails, 'Song Details (Batch)');
+          } else {
+            _addToCliOutput('❌ Invalid response format for batch mode');
+          }
+        } else {
+          _addToCliOutput('❌ Failed to get song details');
+          _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
+        }
       }
+
+      _addToCliOutput('🎉 SUCCESS: Song details operation completed');
     } catch (e) {
       _addToCliOutput('❌ Exception during song details fetch: $e');
     } finally {

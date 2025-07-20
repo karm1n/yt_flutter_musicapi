@@ -52,6 +52,9 @@ class YTMusicResponse<T> {
   final String? message;
   final String? error;
   final int? count;
+  final int? processed;
+  final int? errorCount;
+  final List<Map<String, dynamic>>? errors;
 
   YTMusicResponse({
     required this.success,
@@ -59,29 +62,37 @@ class YTMusicResponse<T> {
     this.message,
     this.error,
     this.count,
+    this.processed,
+    this.errorCount,
+    this.errors,
   });
 
   factory YTMusicResponse.fromMap(Map<String, dynamic> map) {
-    // Debug print to see what we're receiving
-    print('Received response map: $map');
-
-    // Handle cases where data might be in 'data' or 'results' field
-    dynamic data = map['data'] ?? map['results'];
-
-    // Special handling for list data
-    if (data is List) {
-      print('Data is a list with ${data.length} items');
-      if (data.isNotEmpty) {
-        print('First item: ${data.first}');
-      }
+    // Handle batch mode responses that include processing stats
+    if (map.containsKey('processed')) {
+      return YTMusicResponse<T>(
+        success: map['success'] ?? false,
+        data: map['data'] as T?,
+        message: map['message'],
+        error: map['error'],
+        count: map['count'] ??
+            (map['data'] is List ? (map['data'] as List).length : null),
+        processed: map['processed'],
+        errorCount: map['error_count'],
+        errors: map['errors'] is List
+            ? List<Map<String, dynamic>>.from(map['errors'])
+            : null,
+      );
     }
 
+    // Standard response handling
     return YTMusicResponse<T>(
       success: map['success'] ?? false,
-      data: data as T?,
+      data: map['data'] as T?,
       message: map['message'],
       error: map['error'],
-      count: map['count'] ?? (data is List ? data.length : null),
+      count: map['count'] ??
+          (map['data'] is List ? (map['data'] as List).length : null),
     );
   }
 }
@@ -331,48 +342,98 @@ class YtFlutterMusicapi {
     return _executeApiCall<dynamic>(
       () async {
         try {
+          // Transform the input songs to match Android parameter names
+          final processedSongs = songs.map((song) {
+            return {
+              'song_name': song['title'] ?? '',
+              'artist_name': song['artist'] ?? '',
+            };
+          }).toList();
+
           final response = await _channel.invokeMethod('getSongDetails', {
-            'songs': songs,
-            'mode': mode,
+            'songs': processedSongs,
+            'mode': mode.toLowerCase(),
             'thumbQuality': thumbQuality.value,
             'audioQuality': audioQuality.value,
             'includeAudioUrl': includeAudioUrl,
             'includeAlbumArt': includeAlbumArt,
           });
 
-          if (response is Map<String, dynamic>) {
-            final responseMap = Map<String, dynamic>.from(response);
+          // Convert response to Map if it isn't already
+          final Map<String, dynamic> responseMap = response is Map
+              ? Map<String, dynamic>.from(response)
+              : {'data': response};
 
-            if (mode.toLowerCase() == "single") {
-              // Single mode returns a single SongDetail object
-              final songData = responseMap['data'];
-              if (songData != null) {
-                return SongDetail.fromMap(Map<String, dynamic>.from(songData));
-              }
-              return null;
-            } else {
-              // Batch mode returns a list of SongDetail objects
-              final List<dynamic> dataList = responseMap['data'] ?? [];
-              final List<SongDetail> songDetails = [];
-
-              for (final item in dataList) {
-                try {
-                  if (item is Map) {
-                    final itemMap = Map<String, dynamic>.from(item);
-                    songDetails.add(SongDetail.fromMap(itemMap));
-                  }
-                } catch (e) {
-                  debugPrint('Error processing song detail: $e');
-                }
-              }
-
-              return songDetails;
-            }
+          // Check for error response first
+          if (responseMap.containsKey('error')) {
+            throw PlatformException(
+              code: responseMap['errorCode'] ?? 'UNKNOWN_ERROR',
+              message: responseMap['error']?.toString(),
+              details: responseMap,
+            );
           }
 
-          throw Exception('Invalid response format');
-        } catch (e) {
-          debugPrint('Error in getSongDetails: $e');
+          // Handle based on mode
+          if (mode.toLowerCase() == "single") {
+            // Single mode - expect a single song detail
+            final songData = responseMap['data'] is Map
+                ? Map<String, dynamic>.from(responseMap['data'])
+                : responseMap;
+
+            if (songData.isEmpty) {
+              throw Exception('No song data found');
+            }
+
+            return SongDetail.fromMap(songData);
+          } else {
+            // Batch mode - expect a list of results
+            dynamic data = responseMap['data'];
+            if (data == null) {
+              throw Exception('No data received in batch mode');
+            }
+
+            // Ensure we have a List
+            final List<dynamic> resultsList = data is List ? data : [data];
+
+            final List<SongDetail> songDetails = [];
+            final List<Map<String, dynamic>> errors = [];
+
+            for (final item in resultsList) {
+              try {
+                if (item is Map) {
+                  final itemMap = Map<String, dynamic>.from(item);
+                  if (itemMap.containsKey('error')) {
+                    errors.add({
+                      'error': itemMap['error'],
+                      'success': false,
+                    });
+                  } else {
+                    songDetails.add(SongDetail.fromMap(itemMap));
+                  }
+                }
+              } catch (e, stackTrace) {
+                debugPrint(
+                    'Error processing song detail: $e\n$stackTrace\nItem: $item');
+                errors.add({
+                  'error': e.toString(),
+                  'success': false,
+                });
+              }
+            }
+
+            // Return structured batch response
+            return {
+              'success': true,
+              'data': songDetails,
+              'errors': errors,
+              'count':
+                  responseMap['count'] ?? (songDetails.length + errors.length),
+              'processed': responseMap['processed'] ?? songDetails.length,
+              'error_count': responseMap['errors'] ?? errors.length,
+            };
+          }
+        } catch (e, stackTrace) {
+          debugPrint('Error in getSongDetails: $e\n$stackTrace');
           rethrow;
         }
       },
@@ -516,6 +577,7 @@ class SystemStatus {
 }
 
 /// Data class for Song Details
+/// Data class for Song Details
 class SongDetail {
   final String title;
   final String artists;
@@ -525,6 +587,7 @@ class SongDetail {
   final String? audioUrl;
   final String? year;
   final String? album;
+  final bool? isOriginal;
 
   SongDetail({
     required this.title,
@@ -535,6 +598,7 @@ class SongDetail {
     this.audioUrl,
     this.year,
     this.album,
+    this.isOriginal,
   });
 
   factory SongDetail.fromMap(Map<String, dynamic> map) {
@@ -547,6 +611,9 @@ class SongDetail {
       audioUrl: map['audioUrl']?.toString(),
       year: map['year']?.toString(),
       album: map['album']?.toString(),
+      isOriginal: map['isOriginal'] is bool
+          ? map['isOriginal'] as bool
+          : (map['isOriginal']?.toString().toLowerCase() == 'true'),
     );
   }
 
@@ -560,6 +627,7 @@ class SongDetail {
       'audioUrl': audioUrl,
       'year': year,
       'album': album,
+      'isOriginal': isOriginal,
     };
   }
 

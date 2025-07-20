@@ -25,7 +25,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     required String query,
     int limit = 10,
     String thumbQuality = 'VERY_HIGH',
-    String audioQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
@@ -36,7 +36,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     required String query,
     int limit = 10,
     String thumbQuality = 'VERY_HIGH',
-    String audioQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
@@ -49,7 +49,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     required String artistName,
     int limit = 10,
     String thumbQuality = 'VERY_HIGH',
-    String audioQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
@@ -62,7 +62,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     required String artistName,
     int limit = 10,
     String thumbQuality = 'VERY_HIGH',
-    String audioQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
@@ -91,6 +91,29 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     bool includeAlbumArt = true,
   }) {
     throw UnimplementedError('streamArtistSongs() has not been implemented.');
+  }
+
+  // In YtFlutterMusicapiPlatform interface
+  Future<dynamic> getSongDetails({
+    required List<Map<String, String>> songs,
+    String mode = "batch",
+    String thumbQuality = "VERY_HIGH",
+    String audioQuality = "HIGH",
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    throw UnimplementedError('getSongDetails() has not been implemented.');
+  }
+
+  // Add this method to your platform interface
+  Stream<Map<String, dynamic>> streamSongDetails({
+    required List<Map<String, dynamic>> songs,
+    required String thumbQuality,
+    required String audioQuality,
+    required bool includeAudioUrl,
+    required bool includeAlbumArt,
+  }) {
+    throw UnimplementedError('streamSongDetails() has not been implemented.');
   }
 
   Future<Map<String, dynamic>> fetchLyrics({
