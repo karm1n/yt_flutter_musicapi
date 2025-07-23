@@ -19,7 +19,7 @@ Search songs, stream results in real time, and fetch related tracks—all direct
 ---
 
 <img width="2406" height="2007" alt="YTFLUTTERMUSICAPI" src="https://github.com/user-attachments/assets/54bd0589-83cb-44de-bf06-9f7d87beec7f" />
-## Architecture Diagram
+                                                        **Architecture Diagram**
 
 
 ---
