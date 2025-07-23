@@ -6,10 +6,13 @@ import java.util.concurrent.ConcurrentHashMap
 import android.util.Log
 
 class SearchManager {
+
     private val activeSearches = ConcurrentHashMap<String, SearchHandle>()
     private val lock = Any()
+    private val latestSearchIdsByType = mutableMapOf<String, String>()
 
-    fun registerSearch(
+    /** Register a search, cancel previous active searches of the same type */
+   fun registerSearch(
         searchId: String,
         searchType: String,
         generator: PyObject,
@@ -17,11 +20,18 @@ class SearchManager {
     ): String {
         synchronized(lock) {
             try {
-                cancelType(searchType)
-                
+                cancelType(searchType) // cancel old ones of the same type
+
+                if (activeSearches.containsKey(searchId)) {
+                    cancelSearch(searchId)
+                    Log.w("YTMusicAPI", "Duplicate searchId detected during register: $searchId. Replacing it.")
+                }
+
                 val handle = SearchHandle(generator, coroutineJob, searchType)
                 activeSearches[searchId] = handle
-                Log.d("YTMusicAPI", "Registered new search: $searchId of type $searchType")
+                latestSearchIdsByType[searchType] = searchId // Store as latest ID for this type
+                
+                Log.d("YTMusicAPI", "Registered search: $searchId [type: $searchType]")
                 return searchId
             } catch (e: Exception) {
                 Log.e("YTMusicAPI", "Failed to register search: ${e.message}", e)
@@ -30,79 +40,96 @@ class SearchManager {
         }
     }
 
+    // Add this new method
+    fun isLatestOfType(searchId: String, type: String): Boolean {
+        synchronized(lock) {
+            return latestSearchIdsByType[type] == searchId
+        }
+    }
+    
+    fun has(searchId: String): Boolean {
+        synchronized(lock) {
+            return activeSearches.containsKey(searchId)
+        }
+    }
+
+
+    /** Cancel a specific search by ID */
     fun cancelSearch(searchId: String): Boolean {
         synchronized(lock) {
             val handle = activeSearches.remove(searchId) ?: run {
                 Log.w("YTMusicAPI", "Search $searchId not found for cancellation")
                 return false
             }
-            
-            try {
-                handle.cancel()
-                Log.d("YTMusicAPI", "Cancelled search: $searchId")
-                return true
-            } catch (e: Exception) {
-                Log.e("YTMusicAPI", "Failed to cancel search $searchId: ${e.message}", e)
-                return false
-            }
-        }
-    }
 
-    fun cancelType(searchType: String): Int {
-        synchronized(lock) {
-            val toRemove = activeSearches.filter { it.value.searchType == searchType }.keys
-            var cancelled = 0
-            
-            toRemove.forEach { searchId ->
-                try {
-                    if (cancelSearch(searchId)) {
-                        cancelled++
-                    }
-                } catch (e: Exception) {
-                    Log.w("YTMusicAPI", "Error canceling $searchType search $searchId: ${e.message}")
-                }
-            }
-            
-            Log.d("YTMusicAPI", "Cancelled $cancelled searches of type $searchType")
-            return cancelled
-        }
-    }
-
-    fun cancelAll(): Int {
-        synchronized(lock) {
-            val count = activeSearches.size
-            try {
-                activeSearches.values.forEach { handle ->
-                    try {
-                        handle.cancel()
-                    } catch (e: Exception) {
-                        Log.w("YTMusicAPI", "Error closing search handle: ${e.message}")
-                    }
-                }
-                activeSearches.clear()
-                Log.d("YTMusicAPI", "Cancelled all $count active searches")
-                return count
-            } catch (e: Exception) {
-                Log.e("YTMusicAPI", "Failed to cancel all searches: ${e.message}")
-                return 0
-            }
-        }
-    }
-
-    fun isActive(searchId: String): Boolean {
-        synchronized(lock) {
             return try {
-                if (activeSearches.containsKey(searchId)) {
-                    activeSearches[searchId]?.updateLastAccessed()
-                    true
-                } else false
+                handle.cancel()
+                Log.d("YTMusicAPI", "Successfully cancelled search: $searchId")
+                true
             } catch (e: Exception) {
-                Log.w("YTMusicAPI", "Error checking search activity for $searchId: ${e.message}")
+                Log.e("YTMusicAPI", "Failed to cancel search: $searchId - ${e.message}", e)
                 false
             }
         }
     }
 
+    /** Cancel all active searches of a specific type */
+    fun cancelType(searchType: String): Int {
+        synchronized(lock) {
+            val idsOfType = activeSearches.filter { it.value.searchType == searchType }.keys
+            var cancelledCount = 0
+
+            for (searchId in idsOfType) {
+                try {
+                    if (cancelSearch(searchId)) {
+                        cancelledCount++
+                    }
+                } catch (e: Exception) {
+                    Log.w("YTMusicAPI", "Exception cancelling type $searchType search $searchId: ${e.message}")
+                }
+            }
+
+            Log.i("YTMusicAPI", "Cancelled $cancelledCount searches of type $searchType")
+            return cancelledCount
+        }
+    }
+
+    /** Cancel all current searches */
+    fun cancelAll(): Int {
+        synchronized(lock) {
+            val total = activeSearches.size
+            activeSearches.values.forEach { handle ->
+                try {
+                    handle.cancel()
+                } catch (e: Exception) {
+                    Log.w("YTMusicAPI", "Error cancelling search handle: ${e.message}", e)
+                }
+            }
+            activeSearches.clear()
+            Log.i("YTMusicAPI", "Cancelled all ($total) active searches")
+            return total
+        }
+    }
+
+    /** Check if a specific search is still active */
+    fun isActive(searchId: String): Boolean {
+        synchronized(lock) {
+            return try {
+                val handle = activeSearches[searchId]
+                if (handle != null) {
+                    handle.updateLastAccessed()
+                    true
+                } else {
+                    false
+                }
+            } catch (e: Exception) {
+                Log.w("YTMusicAPI", "Error checking activity for $searchId: ${e.message}")
+                false
+            }
+        }
+    }
+
+    /** Get count of active searches by type */
     fun getActiveCounts(): Map<String, Int> {
         synchronized(lock) {
             return try {
@@ -112,53 +139,78 @@ class SearchManager {
                 }
                 counts
             } catch (e: Exception) {
-                Log.e("YTMusicAPI", "Failed to get active counts: ${e.message}")
+                Log.e("YTMusicAPI", "Error retrieving active search counts: ${e.message}")
                 emptyMap()
             }
         }
     }
 
-    fun cleanupStale(timeoutMillis: Long = 300_000): Int {
+    /** Remove stale searches (never accessed in [timeoutMillis]) */
+    fun cleanupStale(timeoutMillis: Long = 5 * 60 * 1000): Int {
         synchronized(lock) {
             val now = System.currentTimeMillis()
-            val toRemove = activeSearches.filter { 
-                now - it.value.lastAccessed > timeoutMillis 
-            }.keys
-            
-            var cleaned = 0
-            toRemove.forEach { searchId ->
+            val staleIds = activeSearches.filter { now - it.value.lastAccessed > timeoutMillis }.keys
+            var cleanedCount = 0
+
+            for (searchId in staleIds) {
                 try {
                     if (cancelSearch(searchId)) {
-                        cleaned++
+                        cleanedCount++
                     }
                 } catch (e: Exception) {
                     Log.w("YTMusicAPI", "Error cleaning up stale search $searchId: ${e.message}")
                 }
             }
-            
-            if (cleaned > 0) {
-                Log.i("YTMusicAPI", "Cleaned up $cleaned stale searches")
+
+            if (cleanedCount > 0) {
+                Log.i("YTMusicAPI", "Cleaned $cleanedCount stale searches")
             }
-            return cleaned
+
+            return cleanedCount
         }
     }
 
+
+    
+
+    /** Represents one active search instance */
     inner class SearchHandle(
-        val generator: PyObject,
-        val job: Job,
+        private val generator: PyObject,
+        private val job: Job,
         val searchType: String,
         var lastAccessed: Long = System.currentTimeMillis()
     ) {
         fun cancel() {
+            
+            tryClosingGenerator(searchType, generator)
+
             try {
-                // Fixed: Using cancel() without message or with proper CancellationException
-                job.cancel()
-                generator.callAttr("close")
+                generator.callAttr("__close__")
+                Log.d("YTMusicAPI", "Generator closed gracefully")
             } catch (e: Exception) {
-                Log.e("YTMusicAPI", "Error cancelling search handle", e)
+                if (e.message?.contains("has no attribute '__close__'") == true) {
+                    Log.d("YTMusicAPI", "Generator has no '__close__' method")
+                } else {
+                    Log.w("YTMusicAPI", "Error closing generator: ${e.message}", e)
+                }
+            }
+
+        }
+
+        private fun tryClosingGenerator(name: String, generator: PyObject?) {
+            try {
+                generator?.callAttr("__close__")
+                Log.d("YTMusicAPI", "[$name] Generator closed successfully")
+            } catch (e: Exception) {
+                if (e.message?.contains("has no attribute '__close__'") == true) {
+                    Log.d("YTMusicAPI", "[$name] Generator does not support __close__")
+                } else {
+                    Log.w("YTMusicAPI", "[$name] Failed to close generator: ${e.message}", e)
+                }
             }
         }
-        
+
+
         fun updateLastAccessed() {
             lastAccessed = System.currentTimeMillis()
         }

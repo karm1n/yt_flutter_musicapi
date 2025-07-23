@@ -18,12 +18,13 @@ import kotlin.coroutines.resumeWithException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+    companion object {
+        const val SEARCH_TYPE = YtFlutterMusicapiPlugin.SEARCH_TYPE_SEARCH
+    }
+    
     private var eventSink: EventChannel.EventSink? = null
     private var searchId: String? = null
     private var job: Job? = null
-    
-    // Create executor lazily and track its state
-    @Volatile
     private var pythonExecutor: ExecutorService? = null
     private val executorLock = Object()
     
@@ -51,7 +52,7 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                 val query = args["query"] as? String ?: throw IllegalArgumentException("Query is required")
                 searchId = "search_${query.hashCode()}_${System.currentTimeMillis()}"
 
-                plugin.searchManager.cancelType(YtFlutterMusicapiPlugin.SEARCH_TYPE_SEARCH)
+                plugin.searchManager.cancelType(SEARCH_TYPE)
                 
                 val limit = args["limit"] as? Int ?: 50
                 val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH" 
@@ -63,7 +64,6 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
 
                 Log.d("YTMusicAPI", "SearchStreamHandler: Creating generator for query: $query")
                 
-                // Create generator using dedicated Python thread
                 val generator = withContext(Dispatchers.IO) {
                     suspendCancellableCoroutine<PyObject> { continuation ->
                         val executor = getOrCreateExecutor()
@@ -88,35 +88,39 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                             continuation.resumeWithException(e)
                         }
                         
-                        // Handle cancellation
                         continuation.invokeOnCancellation {
                             Log.d("YTMusicAPI", "SearchStreamHandler: Generator creation cancelled")
                         }
                     }
                 }
 
-                plugin.searchManager.registerSearch(searchId!!, YtFlutterMusicapiPlugin.SEARCH_TYPE_SEARCH, generator, job!!)
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
 
                 Log.d("YTMusicAPI", "SearchStreamHandler: Starting iteration")
                 
-                // Process items with improved error handling and batching
                 processSearchResults(generator, events, limit)
                 
                 withContext(Dispatchers.Main) {
-                    events?.endOfStream()
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
                 }
                 
             } catch (e: TimeoutCancellationException) {
                 Log.e("YTMusicAPI", "SearchStreamHandler: Overall timeout", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("TIMEOUT_ERROR", "Search request timed out", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Search request timed out", null)
+                    }
                 }
             } catch (e: CancellationException) {
                 Log.d("YTMusicAPI", "SearchStreamHandler: Search cancelled")
             } catch (e: Exception) {
                 Log.e("YTMusicAPI", "SearchStreamHandler: Stream error: ${e.message}", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
                 }
             } finally {
                 searchId?.let { plugin.searchManager.cancelSearch(it) }
@@ -129,11 +133,10 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
         val cancelled = AtomicBoolean(false)
         val iterator = generator.callAttr("__iter__")
 
-        while (plugin.searchManager.isActive(searchId!!) && itemCount < limit && !cancelled.get()) {
+        while (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) && itemCount < limit && !cancelled.get()) {
             try {
                 Log.d("YTMusicAPI", "SearchStreamHandler: Attempting to get next item ($itemCount)")
                 
-                // Use dedicated Python thread with proper timeout handling
                 val item = withTimeoutOrNull(20000L) {
                     suspendCancellableCoroutine<PyObject?> { continuation ->
                         val executor = getOrCreateExecutor()
@@ -172,17 +175,19 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                 val songData = plugin.convertPythonDictToMap(item)
                 Log.d("YTMusicAPI", "SearchStreamHandler: Processing item: ${songData["title"]}")
                 
-                // Send result on Main thread
+                // Send result on Main thread with latest check
                 withContext(Dispatchers.Main) {
-                    events?.success(mapOf(
-                        "title" to (songData["title"]?.toString() ?: "Unknown"),
-                        "artists" to (songData["artists"]?.toString() ?: "Unknown"), 
-                        "videoId" to (songData["videoId"]?.toString() ?: ""),
-                        "duration" to (songData["duration"]?.toString() ?: ""),
-                        "year" to (songData["year"]?.toString() ?: ""),
-                        "albumArt" to (songData["albumArt"]?.toString() ?: ""),
-                        "audioUrl" to (songData["audioUrl"]?.toString() ?: "")
-                    ))
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.success(mapOf(
+                            "title" to (songData["title"]?.toString() ?: "Unknown"),
+                            "artists" to (songData["artists"]?.toString() ?: "Unknown"), 
+                            "videoId" to (songData["videoId"]?.toString() ?: ""),
+                            "duration" to (songData["duration"]?.toString() ?: ""),
+                            "year" to (songData["year"]?.toString() ?: ""),
+                            "albumArt" to (songData["albumArt"]?.toString() ?: ""),
+                            "audioUrl" to (songData["audioUrl"]?.toString() ?: "")
+                        ))
+                    }
                 }
                 
                 itemCount++
@@ -194,7 +199,9 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
             } catch (e: TimeoutCancellationException) {
                 Log.e("YTMusicAPI", "SearchStreamHandler: Timeout getting item $itemCount", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("TIMEOUT_ERROR", "Request timed out getting item $itemCount", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Request timed out getting item $itemCount", null)
+                    }
                 }
                 break
             } catch (e: CancellationException) {
@@ -218,7 +225,6 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
         searchId?.let { plugin.searchManager.cancelSearch(it) }
         eventSink = null
         
-        // Shutdown executor safely
         synchronized(executorLock) {
             pythonExecutor?.let { executor ->
                 if (!executor.isShutdown) {
@@ -232,11 +238,13 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+    companion object {
+        const val SEARCH_TYPE = YtFlutterMusicapiPlugin.SEARCH_TYPE_RELATED
+    }
+    
     private var eventSink: EventChannel.EventSink? = null
     private var searchId: String? = null
     private var job: Job? = null
-    
-    @Volatile
     private var pythonExecutor: ExecutorService? = null
     private val executorLock = Object()
     
@@ -265,7 +273,7 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
                 val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name required")
                 searchId = "related_${songName.hashCode()}_${artistName.hashCode()}_${System.currentTimeMillis()}"
 
-                plugin.searchManager.cancelType(YtFlutterMusicapiPlugin.SEARCH_TYPE_RELATED)
+                plugin.searchManager.cancelType(SEARCH_TYPE)
                 
                 val limit = args["limit"] as? Int ?: 65
                 val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
@@ -306,27 +314,33 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
                     }
                 }
 
-                plugin.searchManager.registerSearch(searchId!!, YtFlutterMusicapiPlugin.SEARCH_TYPE_RELATED, generator, job!!)
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
 
                 Log.d("YTMusicAPI", "RelatedSongsStreamHandler: Starting iteration")
                 
                 processRelatedResults(generator, events, limit)
                 
                 withContext(Dispatchers.Main) {
-                    events?.endOfStream()
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
                 }
                 
             } catch (e: TimeoutCancellationException) {
                 Log.e("YTMusicAPI", "RelatedSongsStreamHandler: Overall timeout", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("TIMEOUT_ERROR", "Related songs request timed out", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Related songs request timed out", null)
+                    }
                 }
             } catch (e: CancellationException) {
                 Log.d("YTMusicAPI", "RelatedSongsStreamHandler: Search cancelled")
             } catch (e: Exception) {
                 Log.e("YTMusicAPI", "RelatedSongsStreamHandler: Stream error", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
                 }
             } finally {
                 searchId?.let { plugin.searchManager.cancelSearch(it) }
@@ -339,7 +353,7 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
         val cancelled = AtomicBoolean(false)
         val iterator = generator.callAttr("__iter__")
 
-        while (plugin.searchManager.isActive(searchId!!) && itemCount < limit && !cancelled.get()) {
+        while (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) && itemCount < limit && !cancelled.get()) {
             try {
                 Log.d("YTMusicAPI", "RelatedSongsStreamHandler: Attempting to get next item ($itemCount)")
                 
@@ -379,15 +393,17 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
                 Log.d("YTMusicAPI", "RelatedSongsStreamHandler: Processing item: ${songData["title"]}")
                 
                 withContext(Dispatchers.Main) {
-                    events?.success(mapOf(
-                        "title" to (songData["title"]?.toString() ?: "Unknown"),
-                        "artists" to (songData["artists"]?.toString() ?: "Unknown"),
-                        "videoId" to (songData["videoId"]?.toString() ?: ""),
-                        "duration" to (songData["duration"]?.toString() ?: ""),
-                        "albumArt" to (songData["albumArt"]?.toString() ?: ""),
-                        "audioUrl" to (songData["audioUrl"]?.toString() ?: ""),
-                        "isOriginal" to (songData["isOriginal"]?.toString()?.toBoolean() ?: false)
-                    ))
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.success(mapOf(
+                            "title" to (songData["title"]?.toString() ?: "Unknown"),
+                            "artists" to (songData["artists"]?.toString() ?: "Unknown"),
+                            "videoId" to (songData["videoId"]?.toString() ?: ""),
+                            "duration" to (songData["duration"]?.toString() ?: ""),
+                            "albumArt" to (songData["albumArt"]?.toString() ?: ""),
+                            "audioUrl" to (songData["audioUrl"]?.toString() ?: ""),
+                            "isOriginal" to (songData["isOriginal"]?.toString()?.toBoolean() ?: false)
+                        ))
+                    }
                 }
                 
                 itemCount++
@@ -421,19 +437,22 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
             }
             pythonExecutor = null
         }
-    }    
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+
+    companion object {
+        const val SEARCH_TYPE = YtFlutterMusicapiPlugin.SEARCH_TYPE_ARTIST
+    }
+
     private var eventSink: EventChannel.EventSink? = null
     private var searchId: String? = null
     private var job: Job? = null
-    
-    @Volatile
     private var pythonExecutor: ExecutorService? = null
     private val executorLock = Object()
-    
+
     private fun getOrCreateExecutor(): ExecutorService {
         return synchronized(executorLock) {
             pythonExecutor?.takeIf { !it.isShutdown && !it.isTerminated } ?: run {
@@ -454,8 +473,8 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
         job = plugin.coroutineScope.launch {
             try {
                 Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Starting artist songs execution")
-                
-                val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name required")
+
+                val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("artistName required")
                 searchId = "artist_${artistName.hashCode()}_${System.currentTimeMillis()}"
 
                 val limit = args["limit"] as? Int ?: 25
@@ -464,11 +483,12 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                 val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
                 val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
 
-                val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher not initialized")
-                plugin.searchManager.cancelType(YtFlutterMusicapiPlugin.SEARCH_TYPE_ARTIST)
+                plugin.searchManager.cancelType(SEARCH_TYPE)
 
-                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Creating generator for artist: $artistName")
-                
+                val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher unavailable")
+
+                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Creating generator for: $artistName")
+
                 val generator = suspendCancellableCoroutine<PyObject> { continuation ->
                     val executor = getOrCreateExecutor()
                     try {
@@ -491,36 +511,46 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                     } catch (e: Exception) {
                         continuation.resumeWithException(e)
                     }
-                    
+
                     continuation.invokeOnCancellation {
                         Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Generator creation cancelled")
                     }
                 }
-                
-                plugin.searchManager.registerSearch(searchId!!, YtFlutterMusicapiPlugin.SEARCH_TYPE_ARTIST, generator, job!!)
+
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
 
                 Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Starting iteration")
-                
                 processArtistResults(generator, events, limit, artistName)
-                
+
                 withContext(Dispatchers.Main) {
-                    events?.endOfStream()
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
                 }
-                
+
             } catch (e: TimeoutCancellationException) {
-                Log.e("YTMusicAPI", "ArtistSongsStreamHandler: Overall timeout", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("TIMEOUT_ERROR", "Artist songs request timed out", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Artist songs request timed out", null)
+                    }
                 }
             } catch (e: CancellationException) {
                 Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Search cancelled")
             } catch (e: Exception) {
                 Log.e("YTMusicAPI", "ArtistSongsStreamHandler: Stream error", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
                 }
             } finally {
-                searchId?.let { plugin.searchManager.cancelSearch(it) }
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    } else {
+                        Log.d("YTMusicAPI", "Search $it not found for cancellation (already closed)")
+                    }
+                }
             }
         }
     }
@@ -530,10 +560,14 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
         val cancelled = AtomicBoolean(false)
         val iterator = generator.callAttr("__iter__")
 
-        while (plugin.searchManager.isActive(searchId!!) && itemCount < limit && !cancelled.get()) {
+        while (
+            plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) &&
+            itemCount < limit &&
+            !cancelled.get()
+        ) {
             try {
-                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Attempting to get next item ($itemCount)")
-                
+                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Getting item $itemCount")
+
                 val item = withTimeoutOrNull(20000L) {
                     suspendCancellableCoroutine<PyObject?> { continuation ->
                         val executor = getOrCreateExecutor()
@@ -543,8 +577,7 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                                     val result = iterator.callAttr("__next__")
                                     continuation.resume(result)
                                 } catch (e: Exception) {
-                                    if (e.message?.contains("StopIteration") == true || 
-                                        e.toString().contains("StopIteration")) {
+                                    if (e.message?.contains("StopIteration") == true) {
                                         continuation.resume(null)
                                     } else {
                                         continuation.resumeWithException(e)
@@ -554,43 +587,45 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                         } catch (e: Exception) {
                             continuation.resumeWithException(e)
                         }
-                        
+
                         continuation.invokeOnCancellation {
                             cancelled.set(true)
                         }
                     }
                 }
-                
+
                 if (item == null || item.isNone) {
                     Log.d("YTMusicAPI", "ArtistSongsStreamHandler: No more items")
                     break
                 }
-                
+
                 val songData = plugin.convertPythonDictToMap(item)
-                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Processing item: ${songData["title"]}")
-                
+                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Processing: ${songData["title"]}")
+
                 withContext(Dispatchers.Main) {
-                    events?.success(mapOf(
-                        "title" to (songData["title"]?.toString() ?: "Unknown"),
-                        "artists" to (songData["artists"]?.toString() ?: "Unknown"),
-                        "videoId" to (songData["videoId"]?.toString() ?: ""),
-                        "duration" to (songData["duration"]?.toString() ?: ""),
-                        "albumArt" to (songData["albumArt"]?.toString() ?: ""),
-                        "audioUrl" to (songData["audioUrl"]?.toString() ?: ""),
-                        "artistName" to artistName
-                    ))
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.success(
+                            mapOf(
+                                "title" to (songData["title"]?.toString() ?: "Unknown"),
+                                "artists" to (songData["artists"]?.toString() ?: "Unknown"),
+                                "videoId" to (songData["videoId"]?.toString() ?: ""),
+                                "duration" to (songData["duration"]?.toString() ?: ""),
+                                "albumArt" to (songData["albumArt"]?.toString() ?: ""),
+                                "audioUrl" to (songData["audioUrl"]?.toString() ?: ""),
+                                "artistName" to artistName
+                            )
+                        )
+                    } else {
+                        Log.d("YTMusicAPI", "⚠️ Skipped result for stale search: $searchId")
+                    }
                 }
-                
+
                 itemCount++
-                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Processed $itemCount items")
-                
                 yield()
-                
+
             } catch (e: Exception) {
-                Log.e("YTMusicAPI", "ArtistSongsStreamHandler: Error processing item $itemCount: ${e.message}", e)
-                if (itemCount == 0) {
-                    throw e
-                }
+                Log.e("YTMusicAPI", "ArtistSongsStreamHandler: Error at item $itemCount (${e.message})", e)
+                if (itemCount == 0) throw e
                 continue
             }
         }
@@ -601,27 +636,32 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
     override fun onCancel(arguments: Any?) {
         Log.d("YTMusicAPI", "ArtistSongsStreamHandler: onCancel called")
         job?.cancel()
-        searchId?.let { plugin.searchManager.cancelSearch(it) }
-        eventSink = null
-        
-        synchronized(executorLock) {
-            pythonExecutor?.let { executor ->
-                if (!executor.isShutdown) {
-                    executor.shutdown()
-                }
+        searchId?.let {
+            if (plugin.searchManager.has(it)) {
+                plugin.searchManager.cancelSearch(it)
+            } else {
+                Log.d("YTMusicAPI", "Nothing to cancel for $it")
             }
+        }
+        eventSink = null
+
+        synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown }?.shutdown()
             pythonExecutor = null
         }
     }
 }
 
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+    companion object {
+        const val SEARCH_TYPE = YtFlutterMusicapiPlugin.SEARCH_TYPE_DETAILS
+    }
+    
     private var eventSink: EventChannel.EventSink? = null
     private var searchId: String? = null
     private var job: Job? = null
-    
-    // Make executor non-static to avoid shutdown issues
     private val pythonExecutor by lazy {
         Executors.newSingleThreadExecutor { r ->
             Thread(r, "PythonExecutor-Details").apply { isDaemon = true }
@@ -652,9 +692,8 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                 val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
 
                 val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher not initialized")
-                plugin.searchManager.cancelType(YtFlutterMusicapiPlugin.SEARCH_TYPE_DETAILS)
+                plugin.searchManager.cancelType(SEARCH_TYPE)
 
-                // Create Python list
                 val generator = withContext(Dispatchers.IO) {
                     suspendCancellableCoroutine<PyObject> { continuation ->
                         try {
@@ -663,7 +702,6 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                             
                             for (song in songs) {
                                 val pySong = plugin.getPythonInstance()?.getBuiltins()?.callAttr("dict") ?: continue
-                                // Use correct parameter names expected by Python
                                 pySong.callAttr("__setitem__", "song_name", song["title"] ?: "")
                                 pySong.callAttr("__setitem__", "artist_name", song["artist"] ?: "")
                                 pySongs.callAttr("append", pySong)
@@ -684,13 +722,12 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                     }
                 }
 
-                plugin.searchManager.registerSearch(searchId!!, YtFlutterMusicapiPlugin.SEARCH_TYPE_DETAILS, generator, job!!)
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
 
-                // Process results
                 val iterator = generator.callAttr("__iter__")
                 var itemCount = 0
 
-                while (plugin.searchManager.isActive(searchId!!)) {
+                while (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
                     try {
                         val item = withTimeoutOrNull(18000L) {
                             withContext(Dispatchers.IO) {
@@ -703,13 +740,15 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                         val itemMap = plugin.convertPythonDictToMap(item)
                         
                         withContext(Dispatchers.Main) {
-                            if (itemMap.containsKey("error")) {
-                                events?.success(mapOf(
-                                    "error" to itemMap["error"],
-                                    "success" to false
-                                ))
-                            } else {
-                                events?.success(itemMap)
+                            if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                                if (itemMap.containsKey("error")) {
+                                    events?.success(mapOf(
+                                        "error" to itemMap["error"],
+                                        "success" to false
+                                    ))
+                                } else {
+                                    events?.success(itemMap)
+                                }
                             }
                         }
                         
@@ -720,20 +759,26 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                         }
                         Log.e("YTMusicAPI", "Error processing song detail", e)
                         withContext(Dispatchers.Main) {
-                            events?.error("PROCESSING_ERROR", e.message, null)
+                            if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                                events?.error("PROCESSING_ERROR", e.message, null)
+                            }
                         }
                         continue
                     }
                 }
 
                 withContext(Dispatchers.Main) {
-                    events?.endOfStream()
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
                 }
                 
             } catch (e: Exception) {
                 Log.e("YTMusicAPI", "Song details stream error", e)
                 withContext(Dispatchers.Main) {
-                    events?.error("STREAM_ERROR", e.message, null)
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message, null)
+                    }
                 }
             } finally {
                 searchId?.let { plugin.searchManager.cancelSearch(it) }
@@ -749,4 +794,3 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
         pythonExecutor.shutdown()
     }
 }
-

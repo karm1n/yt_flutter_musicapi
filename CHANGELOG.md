@@ -4,14 +4,69 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+[3.2.2]
+
+## Added
+
+- Finalized generator-safe StreamHandlers for:
+
+- SearchStreamHandler
+
+- RelatedSongsStreamHandler
+
+- ArtistSongsStreamHandler
+
+- SongDetailsStreamHandler
+- These handlers now integrate global stream cancellation rules, ensuring only the latest active stream is allowed to emit items.
+
+- Active generator identity verification using isLatestOfType(...) and has(...) in SearchManager to prevent late emissions from stale generators.
+
+- Stream-safe coroutine helpers that fully honor onCancel() and avoid generator.__close__ errors during rapid query changes.
+
+## Fixed
+
+- 🛡️ 1% race condition that allowed a stale item ("my strange addiction") from a previous generator after switching to a new stream (e.g. "Dance Monkey"). This was eliminated by protecting both:
+
+- 🔎 Kotlin: Before delivering items to Flutter (events.success(...))
+
+- 🧠 Python: Before yield within generator, via inspector.is_active(...) guards
+
+- ✂️ Removed useless variables like generatorRegistered = true from Kotlin, which were unused and showing linter warnings.
+
+- 🧹 Prevented cancellation log spam:
+
+- Used searchManager.has(searchId) before calling cancelSearch(...) to avoid:
+
+
+- W/YTMusicAPI: Search search_... not found for cancellation
+
+- 🔄 Fixed Python generators still running yield after close attempt:
+
+- Now intercepted precisely before results are sent in Kotlin and Python.
+
+## Improved
+
+- ✅ Flutter cancellation consistency: Only the latest searchId per stream type (search, related, artist, details) is now allowed to run or emit.
+
+- ⚠ Better log annotations in Kotlin and Python, including:
+
+- PythonEngineInspector: Yield guard check
+
+- YTMusicAPI: Skipping stale result from cancelled stream
+
+- Final StopIteration handling and shutdown trace for debugging
+
+- 🚫 Suppressed Generator does not support __close__ warning by properly handling fallback GeneratorExit in Python
 
 ## [3.2.1]
 
 ### Added
+
 - Added proper streaminghandlers for (search, related songs, artist songs, song details)
 - Added support for Lyrics from YTMUSIC request to `YtFlutterMusicapi.fetchLyrics(songName, AristName)` no time synced only.
 
 ## Fixed 
+
 - Multiple generators race conditions now engine checks the generators by ID.
 
 - Error Handling: Improved error reporting in python Engine with logs stating with
