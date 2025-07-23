@@ -16,13 +16,44 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
       const EventChannel('yt_flutter_musicapi/songDetailsStream');
 
   @override
-  Future<Map<String, dynamic>> initialize(
-      {String? proxy, String country = 'US'}) async {
+  Future<Map<String, dynamic>> initialize({
+    String? proxy,
+    String country = 'US',
+  }) async {
     final result = await _methodChannel.invokeMethod('initialize', {
       'proxy': proxy,
       'country': country,
     });
     return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<Map<String, dynamic>> searchMusic({
+    required String query,
+    int limit = 10,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) async {
+    try {
+      final result = await _methodChannel.invokeMethod('searchMusic', {
+        'query': query,
+        'limit': limit,
+        'thumbQuality': thumbQuality,
+        'audioQuality': audioQuality,
+        'includeAudioUrl': includeAudioUrl,
+        'includeAlbumArt': includeAlbumArt,
+      });
+      return Map<String, dynamic>.from(result);
+    } on PlatformException catch (e) {
+      // Convert platform exceptions to error map
+      return {
+        'success': false,
+        'error': e.message,
+        'code': e.code,
+      };
+    }
   }
 
   @override
@@ -34,7 +65,6 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
-    // This will trigger Kotlin to cancel any previous search
     _methodChannel.invokeMethod('startStreamingSearch', {
       'query': query,
       'limit': limit,
@@ -55,6 +85,28 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
   }
 
   @override
+  Future<Map<String, dynamic>> getRelatedSongs({
+    required String songName,
+    required String artistName,
+    int limit = 10,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) async {
+    final result = await _methodChannel.invokeMethod('getRelatedSongs', {
+      'songName': songName,
+      'artistName': artistName,
+      'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
   Stream<Map<String, dynamic>> streamRelatedSongs({
     required String songName,
     required String artistName,
@@ -64,7 +116,6 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
-    // This will trigger Kotlin to cancel any previous related songs search
     _methodChannel.invokeMethod('startStreamingRelated', {
       'songName': songName,
       'artistName': artistName,
@@ -87,6 +138,26 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
   }
 
   @override
+  Future<Map<String, dynamic>> getArtistSongs({
+    required String artistName,
+    int limit = 10,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) async {
+    final result = await _methodChannel.invokeMethod('getArtistSongs', {
+      'artistName': artistName,
+      'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
   Stream<Map<String, dynamic>> streamArtistSongs({
     required String artistName,
     int limit = 45,
@@ -95,7 +166,6 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
   }) {
-    // This will trigger Kotlin to cancel any previous artist songs search
     _methodChannel.invokeMethod('startStreamingArtist', {
       'artistName': artistName,
       'limit': limit,
@@ -116,6 +186,26 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
   }
 
   @override
+  Future<Map<String, dynamic>> getSongDetails({
+    required List<Map<String, String>> songs,
+    String mode = "batch",
+    String thumbQuality = "VERY_HIGH",
+    String audioQuality = "HIGH",
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) async {
+    final result = await _methodChannel.invokeMethod('getSongDetails', {
+      'songs': songs,
+      'mode': mode,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
   Stream<Map<String, dynamic>> streamSongDetails({
     required List<Map<String, dynamic>> songs,
     required String thumbQuality,
@@ -123,7 +213,7 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
     required bool includeAudioUrl,
     required bool includeAlbumArt,
   }) {
-    // This will trigger Kotlin to cancel any previous song details search
+    // Invoke the method to start streaming
     _methodChannel.invokeMethod('startStreamingDetails', {
       'songs': songs,
       'thumbQuality': thumbQuality,
@@ -132,6 +222,7 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
       'includeAlbumArt': includeAlbumArt,
     });
 
+    // Return the event stream
     return _detailsEventChannel.receiveBroadcastStream({
       'songs': songs,
       'thumbQuality': thumbQuality,
@@ -142,8 +233,26 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
   }
 
   @override
+  Future<Map<String, dynamic>> fetchLyrics({
+    required String songName,
+    required String artistName,
+  }) async {
+    final result = await _methodChannel.invokeMethod('fetchLyrics', {
+      'songName': songName,
+      'artistName': artistName,
+    });
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
   Future<Map<String, dynamic>> cancelAllSearches() async {
     final result = await _methodChannel.invokeMethod('cancelAllSearches');
+    return Map<String, dynamic>.from(result);
+  }
+
+  @override
+  Future<Map<String, dynamic>> dispose() async {
+    final result = await _methodChannel.invokeMethod('dispose');
     return Map<String, dynamic>.from(result);
   }
 }

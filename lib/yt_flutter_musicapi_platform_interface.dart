@@ -111,9 +111,8 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
   }
 
   Future<Map<String, dynamic>> fetchLyrics({
-    required String title,
-    required String artist,
-    int? duration,
+    required String songName,
+    required String artistName,
   }) {
     throw UnimplementedError('fetchLyrics() has not been implemented.');
   }

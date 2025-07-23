@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1]
+
+### Added
+- Added proper streaminghandlers for (search, related songs, artist songs, song details)
+- Added support for Lyrics from YTMUSIC request to `YtFlutterMusicapi.fetchLyrics(songName, AristName)` no time synced only.
+
+## Fixed 
+- Multiple generators race conditions now engine checks the generators by ID.
+
+- Error Handling: Improved error reporting in python Engine with logs stating with
+
+- PythonEngine: 
+- PythonEngineInspector: 
+- PythonEngineExceptionsWarning: 
+- PythonEngineExceptionsCritical: 
 
 ## [3.1.1]
 

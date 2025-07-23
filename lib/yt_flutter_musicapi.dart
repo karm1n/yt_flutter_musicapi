@@ -442,6 +442,188 @@ class YtFlutterMusicapi {
     );
   }
 
+  Stream<YTMusicResponse<dynamic>> streamSongDetails({
+    required List<Map<String, String>> songs,
+    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
+    AudioQuality audioQuality = AudioQuality.veryHigh,
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    if (!_isInitialized) {
+      return Stream.error(YTMusicResponse<dynamic>(
+        success: false,
+        error: 'YTMusic API not initialized. Call initialize() first.',
+      ));
+    }
+
+    try {
+      // Transform the input songs to match Android parameter names
+      final processedSongs = songs.map((song) {
+        return {
+          'song_name': song['title'] ?? '',
+          'artist_name': song['artist'] ?? '',
+        };
+      }).toList();
+
+      final stream = YtFlutterMusicapiPlatform.instance.streamSongDetails(
+        songs: processedSongs,
+        thumbQuality: thumbQuality.value,
+        audioQuality: audioQuality.value,
+        includeAudioUrl: includeAudioUrl,
+        includeAlbumArt: includeAlbumArt,
+      );
+
+      return stream.map((event) {
+        try {
+          final eventMap = Map<String, dynamic>.from(event);
+
+          // Handle error items
+          if (eventMap.containsKey('error')) {
+            return YTMusicResponse<dynamic>(
+              success: false,
+              error: eventMap['error']?.toString(),
+              data: null,
+            );
+          }
+
+          // Handle successful song details
+          final songDetail = SongDetail.fromMap(eventMap);
+          return YTMusicResponse<dynamic>(
+            success: true,
+            data: songDetail,
+          );
+        } catch (e) {
+          return YTMusicResponse<dynamic>(
+            success: false,
+            error: 'Error processing stream item: ${e.toString()}',
+            data: null,
+          );
+        }
+      }).handleError((error) {
+        return YTMusicResponse<dynamic>(
+          success: false,
+          error: error.toString(),
+        );
+      });
+    } catch (e) {
+      return Stream.error(YTMusicResponse<dynamic>(
+        success: false,
+        error: e.toString(),
+      ));
+    }
+  }
+
+  /// Fetches lyrics for a song from YouTube Music
+  ///
+  /// [songName] - The name of the song to fetch lyrics for
+  /// [artistName] - The name of the artist (helps with more accurate matching)
+  ///
+  /// Returns a [YTMusicResponse] containing the [Lyrics] if successful
+  Future<YTMusicResponse<Lyrics>> fetchLyrics({
+    required String songName,
+    required String artistName,
+  }) async {
+    return _executeApiCall<Lyrics>(() async {
+      try {
+        final response = await YtFlutterMusicapiPlatform.instance.fetchLyrics(
+          songName: songName,
+          artistName: artistName,
+        );
+
+        // Debug: Print raw response structure
+        debugPrint('Raw response type: ${response.runtimeType}');
+        debugPrint('Raw response: $response');
+
+        // Use recursive casting to handle nested maps properly
+        final responseMap = _castToStringDynamicMap(response);
+
+        // Debug: Print casted response structure
+        debugPrint('Casted response keys: ${responseMap.keys}');
+        debugPrint('Debug info: ${responseMap['debug_info']}');
+
+        // Check for error response first
+        if (responseMap.containsKey('error')) {
+          throw PlatformException(
+            code: responseMap['errorCode']?.toString() ?? 'LYRICS_ERROR',
+            message: responseMap['error']?.toString(),
+            details: responseMap,
+          );
+        }
+
+        // Convert the response to our Lyrics model
+        final lyricsData = responseMap['data'] ?? responseMap;
+        debugPrint('Lyrics data type: ${lyricsData.runtimeType}');
+        debugPrint(
+            'Lyrics data keys: ${lyricsData is Map ? (lyricsData).keys : 'Not a map'}');
+
+        // Check if lyrics data contains the lyrics list
+        if (lyricsData is Map) {
+          final lyricsMap = lyricsData;
+          final lyricsList = lyricsMap['lyrics'];
+          debugPrint('Lyrics list type: ${lyricsList.runtimeType}');
+          debugPrint(
+              'Lyrics list length: ${lyricsList is List ? lyricsList.length : 'Not a list'}');
+
+          if (lyricsList is List && lyricsList.isNotEmpty) {
+            debugPrint('First lyrics item: ${lyricsList.first}');
+            debugPrint(
+                'First lyrics item type: ${lyricsList.first.runtimeType}');
+          }
+        }
+
+        final castedLyricsData = _castToStringDynamicMap(lyricsData);
+        debugPrint('Final casted lyrics data: $castedLyricsData');
+
+        return Lyrics.fromMap(castedLyricsData);
+      } catch (e, stackTrace) {
+        debugPrint('Error in fetchLyrics: $e');
+        debugPrint('Stack trace: $stackTrace');
+        rethrow;
+      }
+    });
+  }
+
+  Map<String, dynamic> _castToStringDynamicMap(dynamic value) {
+    if (value == null) {
+      return <String, dynamic>{};
+    }
+
+    if (value is Map<String, dynamic>) {
+      // Already the correct type, but recursively cast nested values
+      return value.map((key, val) => MapEntry(key, _castDynamicValue(val)));
+    }
+
+    if (value is Map) {
+      // Convert to Map<String, dynamic> and recursively cast nested values
+      return value
+          .map((key, val) => MapEntry(key.toString(), _castDynamicValue(val)));
+    }
+
+    // If it's not a Map, return empty map (shouldn't happen in normal cases)
+    debugPrint('Warning: Expected Map but got ${value.runtimeType}: $value');
+    return <String, dynamic>{};
+  }
+
+  dynamic _castDynamicValue(dynamic value) {
+    if (value == null) {
+      return null;
+    }
+
+    if (value is List) {
+      // Recursively cast list items
+      return value.map((item) => _castDynamicValue(item)).toList();
+    }
+
+    if (value is Map) {
+      // Recursively cast map values
+      return value
+          .map((key, val) => MapEntry(key.toString(), _castDynamicValue(val)));
+    }
+
+    // For primitive types (String, int, double, bool), return as-is
+    return value;
+  }
+
   /// Cleans up resources
   Future<YTMusicResponse<void>> dispose() async {
     try {
@@ -579,7 +761,6 @@ class SystemStatus {
 }
 
 /// Data class for Song Details
-/// Data class for Song Details
 class SongDetail {
   final String title;
   final String artists;
@@ -590,6 +771,8 @@ class SongDetail {
   final String? year;
   final String? album;
   final bool? isOriginal;
+  final double? progress; // For streaming progress indication
+  final String? status; // Processing status
 
   SongDetail({
     required this.title,
@@ -601,6 +784,8 @@ class SongDetail {
     this.year,
     this.album,
     this.isOriginal,
+    this.progress,
+    this.status,
   });
 
   factory SongDetail.fromMap(Map<String, dynamic> map) {
@@ -616,6 +801,8 @@ class SongDetail {
       isOriginal: map['isOriginal'] is bool
           ? map['isOriginal'] as bool
           : (map['isOriginal']?.toString().toLowerCase() == 'true'),
+      progress: map['progress']?.toDouble(),
+      status: map['status']?.toString(),
     );
   }
 
@@ -630,12 +817,17 @@ class SongDetail {
       'year': year,
       'album': album,
       'isOriginal': isOriginal,
+      'progress': progress,
+      'status': status,
     };
   }
 
   @override
   String toString() {
-    return 'SongDetail(title: $title, artists: $artists, videoId: $videoId, duration: $duration, albumArt: $albumArt, audioUrl: $audioUrl, year: $year, album: $album)';
+    return 'SongDetail(title: $title, artists: $artists, videoId: $videoId, '
+        'duration: $duration, albumArt: $albumArt, audioUrl: $audioUrl, '
+        'year: $year, album: $album, isOriginal: $isOriginal, '
+        'progress: $progress, status: $status)';
   }
 }
 
@@ -774,5 +966,50 @@ class RelatedSong {
           ? map['isOriginal'] as bool
           : (map['isOriginal']?.toString().toLowerCase() == 'true'),
     );
+  }
+}
+
+/// Data class for Lyrics
+class Lyrics {
+  final String text;
+  final String source;
+  final String? language;
+
+  final String songName;
+  final String artistName;
+
+  Lyrics({
+    required this.text,
+    required this.source,
+    this.language,
+    required this.songName,
+    required this.artistName,
+  });
+
+  factory Lyrics.fromMap(Map<String, dynamic> map) {
+    return Lyrics(
+      text: map['lyrics']?.toString() ?? '',
+      source: map['source']?.toString() ?? 'YTMusic',
+      language: map['language']?.toString(),
+      songName: map['songName']?.toString() ?? 'Unknown',
+      artistName: map['artistName']?.toString() ?? 'Unknown',
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'lyrics': text,
+      'source': source,
+      'language': language,
+      'songName': songName,
+      'artistName': artistName,
+    };
+  }
+
+  @override
+  String toString() {
+    return 'Lyrics(text: ${text.length > 20 ? '${text.substring(0, 20)}...' : text}, '
+        'source: $source, language: $language'
+        'songName: $songName, artistName: $artistName)';
   }
 }

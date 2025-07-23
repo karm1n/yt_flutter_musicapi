@@ -760,6 +760,55 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
           _addToCliOutput('❌ Failed to get song details');
           _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
         }
+      } else if (AppSettings.mode == 'stream') {
+        // Handle stream mode with test songs
+        _addToCliOutput(
+          '📋 Streaming details for ${AppSettings.testSongs.length} songs',
+        );
+        for (int i = 0; i < AppSettings.testSongs.length; i++) {
+          final song = AppSettings.testSongs[i];
+          _addToCliOutput(
+            '   ${i + 1}. "${song['title']}" by ${song['artist']}',
+          );
+        }
+
+        int received = 0;
+        final stopwatch = Stopwatch()..start();
+
+        await for (final response in _api.streamSongDetails(
+          songs: AppSettings.testSongs,
+          thumbQuality: AppSettings.thumbnailQuality,
+          audioQuality: AppSettings.audioQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        )) {
+          received++;
+          if (response.success && response.data != null) {
+            final songDetail = response.data as SongDetail;
+            _addToCliOutput(
+              '🎵 Received song $received in ${stopwatch.elapsedMilliseconds}ms:',
+            );
+            _addToCliOutput('   Title: ${songDetail.title}');
+            _addToCliOutput('   Artists: ${songDetail.artists}');
+            _addToCliOutput('   Duration: ${songDetail.duration ?? 'N/A'}');
+            _addToCliOutput('   Video ID: ${songDetail.videoId}');
+            _addToCliOutput('   Year: ${songDetail.year ?? 'N/A'}');
+            _addToCliOutput('   Album: ${songDetail.album ?? 'N/A'}');
+            _addToCliOutput(
+              '   Album Art: ${songDetail.albumArt != null ? 'Available' : 'N/A'}',
+            );
+            _addToCliOutput(
+              '   Audio URL: ${songDetail.audioUrl != null ? 'Available' : 'N/A'}',
+            );
+            _addToCliOutput('   ---');
+          } else {
+            _addToCliOutput('❌ Error for song $received');
+            _addToCliOutput('   Error: ${response.error ?? 'Unknown error'}');
+          }
+          stopwatch.reset();
+        }
+
+        _addToCliOutput('✅ Streamed details for $received songs successfully');
       } else {
         // Handle batch mode with test songs
         _addToCliOutput(
@@ -837,6 +886,73 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
       _addToCliOutput('🎉 SUCCESS: Song details operation completed');
     } catch (e) {
       _addToCliOutput('❌ Exception during song details fetch: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _fetchLyrics() async {
+    if (_isLoading || !_isInitialized) {
+      _addToCliOutput('❌ API not initialized or busy');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    // Use the search query if available, otherwise default to "Billie Eilish bad guy"
+    String query = _searchController.text.trim();
+    if (query.isEmpty) {
+      query = 'Billie Eilish bad guy';
+      _searchController.text = query;
+    }
+
+    // Extract artist and song name (simple parsing for demo)
+    String artistName = 'Billie Eilish';
+    String songName = 'bad guy';
+
+    try {
+      // Try to parse artist and song from query
+      final parts = query.split(' ');
+      if (parts.length > 1) {
+        artistName = parts[0];
+        songName = parts.sublist(1).join(' ');
+      }
+
+      _addToCliOutput('🎵 Fetching lyrics for: "$songName" by $artistName');
+
+      final response = await _api.fetchLyrics(
+        songName: songName,
+        artistName: artistName,
+      );
+
+      if (response.success && response.data != null) {
+        final lyrics = response.data!;
+        _addToCliOutput('✅ Lyrics fetched successfully');
+        _addToCliOutput('📋 Source: ${lyrics.source}');
+        _addToCliOutput('📋 Language: ${lyrics.language ?? 'Unknown'}');
+        _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        _addToCliOutput('🎤 LYRICS:');
+
+        // Split lyrics into lines and add each line to CLI output
+        final lines = lyrics.text.split('\n');
+        for (final line in lines) {
+          if (line.trim().isNotEmpty) {
+            _addToCliOutput(line);
+          }
+        }
+
+        _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        _addToCliOutput('🎉 SUCCESS: Lyrics operation completed');
+      } else {
+        _addToCliOutput('❌ Failed to fetch lyrics');
+        _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
+      }
+    } catch (e) {
+      _addToCliOutput('❌ Exception during lyrics fetch: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -1021,10 +1137,12 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                     SizedBox(height: 16),
 
                     // Button Grid
+                    // Button Grid
                     Expanded(
                       child: GridView.count(
-                        crossAxisCount: 2,
-                        childAspectRatio: 3,
+                        crossAxisCount:
+                            3, // Changed from 2 to 3 to accommodate more buttons
+                        childAspectRatio: 2.5, // Adjusted aspect ratio
                         crossAxisSpacing: 8,
                         mainAxisSpacing: 8,
                         children: [
@@ -1057,7 +1175,6 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                               foregroundColor: Colors.white,
                             ),
                           ),
-                          // Add this button to your button grid (where you have other test buttons)
                           ElevatedButton.icon(
                             icon: Icon(Icons.queue_music),
                             label: Text('Related Songs'),
@@ -1088,6 +1205,17 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                                 : _getSongDetails,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.indigo,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.music_note),
+                            label: Text('Fetch Lyrics'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _fetchLyrics,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.pink,
                               foregroundColor: Colors.white,
                             ),
                           ),
@@ -1196,6 +1324,28 @@ class _SettingsDialogState extends State<SettingsDialog> {
                 border: OutlineInputBorder(),
               ),
               onChanged: (value) => AppSettings.relatedSongTitle = value,
+            ),
+            // Add to your SettingsDialog build method, inside the Column
+            TextField(
+              controller: TextEditingController(
+                text: AppSettings.relatedSongTitle,
+              ),
+              decoration: InputDecoration(
+                labelText: 'Lyrics Song Title',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => AppSettings.relatedSongTitle = value,
+            ),
+            SizedBox(height: 8),
+            TextField(
+              controller: TextEditingController(
+                text: AppSettings.relatedSongArtist,
+              ),
+              decoration: InputDecoration(
+                labelText: 'Lyrics Artist Name',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (value) => AppSettings.relatedSongArtist = value,
             ),
             SizedBox(height: 8),
             TextField(
