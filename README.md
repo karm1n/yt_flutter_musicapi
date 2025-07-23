@@ -1,8 +1,5 @@
 # 🎵 YT Flutter Music API
 
-<img width="2406" height="2007" alt="YTFLUTTERMUSICAPI" src="https://github.com/user-attachments/assets/54bd0589-83cb-44de-bf06-9f7d87beec7f" />
-## Architecture Diagram
-
 A powerful Flutter plugin that bridges **YouTube Music** functionality using a **Kotlin + Python (Chaquopy)** backend.  
 Search songs, stream results in real time, and fetch related tracks—all directly from your Flutter app.
 
@@ -17,6 +14,13 @@ Search songs, stream results in real time, and fetch related tracks—all direct
 - 🧠 Powered by `ytmusicapi` + `yt-dlp`  
 - ⚙️ Kotlin + Python bridge using **Chaquopy**  
 - 📱 Android support with Flutter frontend  
+
+
+---
+
+<img width="2406" height="2007" alt="YTFLUTTERMUSICAPI" src="https://github.com/user-attachments/assets/54bd0589-83cb-44de-bf06-9f7d87beec7f" />
+## Architecture Diagram
+
 
 ---
 
