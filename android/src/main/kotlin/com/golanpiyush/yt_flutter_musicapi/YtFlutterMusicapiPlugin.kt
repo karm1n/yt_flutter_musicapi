@@ -392,89 +392,76 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
     }
 }
 
+    private var isPythonInitializing = false
+    private var isPythonInitialized = false
+
     private fun handleInitialize(call: MethodCall, result: Result) {
-        coroutineScope.launch {
-            try {
-                val proxy = call.argument<String>("proxy")
-                val country = call.argument<String>("country") ?: "US"
-                
-                Log.d(TAG, "Initialize called with proxy: $proxy, country: $country")
-                
-                // Add timeout to prevent hanging
-                withTimeout(30_000) { // 30 second timeout
-                    // Force reinitialization of Python components
-                    initializePython()
-                }
-                
-                // Clear instance cache to force fresh instances
-                instanceCache.clear()
-                
-                val searcherKey = "searcher_${proxy}_${country}"
-                val relatedKey = "related_${proxy}_${country}"
-                
-                Log.d(TAG, "Creating new instances with key: $searcherKey")
-                
-                musicSearcher = if (proxy != null) {
-                    pythonModule!!.callAttr("YTMusicSearcher", proxy, country)
-                } else {
-                    pythonModule!!.callAttr("YTMusicSearcher", null, country)
-                }
-                
-                relatedFetcher = if (proxy != null) {
-                    pythonModule!!.callAttr("YTMusicRelatedFetcher", proxy, country)
-                } else {
-                    pythonModule!!.callAttr("YTMusicRelatedFetcher", null, country)
-                }
-                
-                // Cache the instances
-                instanceCache[searcherKey] = musicSearcher!!
-                instanceCache[relatedKey] = relatedFetcher!!
-                
-                Log.d(TAG, "Initialization successful")
-                
-                withContext(Dispatchers.Main) {
-                    result.success(mapOf(
-                        "success" to true,
-                        "message" to "YTMusic API initialized successfully",
-                        "proxy" to proxy,
-                        "country" to country
-                    ))
-                }
-                
-            } catch (e: TimeoutCancellationException) {
-                Log.e(TAG, "Initialization timed out after 30 seconds")
-                
-                // Clean up on timeout
-                musicSearcher = null
-                relatedFetcher = null
-                pythonModule = null
-                instanceCache.clear()
-                
-                withContext(Dispatchers.Main) {
-                    result.error("INIT_TIMEOUT", "Initialization timed out - Python module may be stuck", mapOf(
-                        "success" to false,
-                        "error" to "Timeout after 30 seconds",
-                        "suggestion" to "Try restarting the app"
-                    ))
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize YTMusic API", e)
-                
-                // Clean up on failure
-                musicSearcher = null
-                relatedFetcher = null
-                instanceCache.clear()
-                
-                withContext(Dispatchers.Main) {
-                    result.error("INIT_ERROR", "Failed to initialize: ${e.message}", mapOf(
-                        "success" to false,
-                        "error" to e.message,
-                        "stackTrace" to Log.getStackTraceString(e)
-                    ))
+        val proxy = call.argument<String>("proxy")
+        val country = call.argument<String>("country") ?: "US"
+        
+        Log.d(TAG, "Initialize called with proxy: $proxy, country: $country")
+
+        // Immediately respond success to Flutter:
+        CoroutineScope(Dispatchers.Main).launch {
+            result.success(
+                mapOf(
+                    "success" to true,
+                    "message" to "YTMusic API initialization started",
+                    "proxy" to proxy,
+                    "country" to country
+                )
+            )
+        }
+
+        // If not already initializing, start initialization in the background
+        if (!isPythonInitialized && !isPythonInitializing) {
+            isPythonInitializing = true
+
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    withTimeout(15_000) {
+                        initializePython() // your heavy work here
+                    }
+
+                    val searcherKey = "searcher_${proxy}_${country}"
+                    val relatedKey = "related_${proxy}_${country}"
+
+                    // Create and cache instances
+                    musicSearcher = pythonModule!!.callAttr("YTMusicSearcher", proxy, country)
+                    relatedFetcher = pythonModule!!.callAttr("YTMusicRelatedFetcher", proxy, country)
+                    
+                    instanceCache[searcherKey] = musicSearcher!!
+                    instanceCache[relatedKey] = relatedFetcher!!
+
+                    isPythonInitialized = true
+                    Log.d(TAG, "Background initialization successful")
+
+                    // Optionally send an event or callback to Flutter here about successful initialization
+
+                } catch (e: TimeoutCancellationException) {
+                    Log.e(TAG, "Background initialization timed out")
+                    cleanupOnFailure()
+                    // Optionally notify Flutter about failure via event channel or other mechanism
+                } catch (e: Exception) {
+                    Log.e(TAG, "Background initialization failed", e)
+                    cleanupOnFailure()
+                    // Optionally notify Flutter about failure
+                } finally {
+                    isPythonInitializing = false
                 }
             }
         }
     }
+
+    private fun cleanupOnFailure() {
+        musicSearcher = null
+        relatedFetcher = null
+        pythonModule = null
+        instanceCache.clear()
+        isPythonInitialized = false
+    }
+
+
 
     private fun handleSearchMusic(call: MethodCall, result: Result) {
         coroutineScope.launch {

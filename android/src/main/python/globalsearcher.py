@@ -587,7 +587,7 @@ class YTMusicSearcher:
             'Accept-Encoding': 'gzip, deflate, br'
         }
 
-    def get_audio_url(self, video_id: str, quality: AudioQuality) -> Optional[str]:
+    def get_audio_url(self, video_id: str, quality: AudioQuality = None) -> Optional[str]:
         format_strategies = [
             "bestaudio[ext=m4a]/bestaudio[ext=mp4]/best[ext=m4a]/best[ext=mp4]",
             "251/250/249/140/139/171/18/22",
@@ -626,25 +626,32 @@ class YTMusicSearcher:
                 if not audio_formats:
                     continue
 
-                # Sort formats by audio bitrate (abr, or tbr fallback)
-                audio_formats.sort(key=lambda f: f.get('abr', 0) or f.get('tbr', 0) or 0)
+                # Sort formats by audio bitrate (highest first)
+                audio_formats.sort(key=lambda f: f.get('abr', 0) or f.get('tbr', 0) or 0, reverse=True)
 
-                # Map desired target bitrate for each quality level
-                target_bitrate = {
-                    AudioQuality.HIGH: 256,
-                    AudioQuality.MEDIUM: 128,
-                    AudioQuality.LOW: 64,
-                }.get(quality, 128)
+                # Try to find formats in this priority: 320 > 256 > 128
+                for target_bitrate in [320, 256, 128]:
+                    for fmt in audio_formats:
+                        current_bitrate = fmt.get('abr', 0) or fmt.get('tbr', 0) or 0
+                        if current_bitrate >= target_bitrate * 0.9:  # Allow 10% tolerance
+                            quality_found = None
+                            if current_bitrate >= 290:  # ~320kbps
+                                quality_found = "320kbps"
+                            elif current_bitrate >= 230:  # ~256kbps
+                                quality_found = "256kbps"
+                            else:  # ~128kbps
+                                quality_found = "128kbps"
+                            
+                            print(f"🎵 Found audio at {quality_found} (actual: {current_bitrate:.0f}kbps)")
+                            return fmt['url']
 
-                # Find format closest to target bitrate
-                best_match = min(
-                    audio_formats,
-                    key=lambda f: abs((f.get('abr', 0) or f.get('tbr', 0) or 0) - target_bitrate)
-                )
+                # If no high quality formats found, return the best available
+                if audio_formats:
+                    current_bitrate = audio_formats[0].get('abr', 0) or audio_formats[0].get('tbr', 0) or 0
+                    print(f"⚠️ Using best available audio: {current_bitrate:.0f}kbps")
+                    return audio_formats[0]['url']
 
-                return best_match['url']
-
-            except yt_dlp.utils.DownloadError as e:
+            except yt_dlp.DownloadError as e:
                 if "HTTP Error 403" in str(e):
                     time.sleep(2)
                     continue
@@ -657,8 +664,37 @@ class YTMusicSearcher:
             except Exception:
                 continue
 
+        print("❌ No suitable audio formats found")
         return None
-    
+
+    def _get_ytmusic_stream(self, video_id: str) -> Optional[str]:
+        """Try to get high quality stream directly from YouTube Music"""
+        try:
+            song_info = self.ytmusic.get_song(video_id)
+            if song_info:
+                # Check for streaming data in the song info
+                streaming_data = song_info.get('streamingData', {})
+                if streaming_data:
+                    # Prefer adaptive formats for higher quality
+                    formats = streaming_data.get('adaptiveFormats', [])
+                    for fmt in formats:
+                        if fmt.get('mimeType', '').startswith('audio/'):
+                            return fmt.get('url')
+        except Exception as e:
+            print(f"⚠️ YouTube Music stream fetch failed: {str(e)}")
+        return None
+
+    def _get_quality_label(self, fmt: dict) -> str:
+        """Determine quality label based on format properties"""
+        bitrate = fmt.get('abr', 0) or fmt.get('tbr', 0) or 0
+        codec = (fmt.get('acodec') or '').lower()
+        
+        if bitrate >= 256 or 'opus' in codec:
+            return "HIGH"
+        elif bitrate >= 128:
+            return "MEDIUM"
+        return "LOW"
+        
     def get_hq_album_art_from_ytdlp(self, video_id: str) -> Optional[str]:
         """Get high quality album art using yt-dlp from video metadata"""
         try:
@@ -880,7 +916,7 @@ class YTMusicSearcher:
         query: str,
         limit: int = 50,
         thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
         include_audio_url: bool = True,
         include_album_art: bool = True
     ) -> Generator[dict, None, None]:
@@ -991,7 +1027,7 @@ class YTMusicSearcher:
         self,
         songs: List[Dict[str, str]],
         thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
         include_audio_url: bool = True,
         include_album_art: bool = True,
         mode: str = "batch"
@@ -1227,7 +1263,7 @@ class YTMusicSearcher:
         self,
         songs: List[Dict[str, str]],
         thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
         include_audio_url: bool = True,
         include_album_art: bool = True
     ) -> Generator[dict, None, None]:
@@ -1343,7 +1379,7 @@ class YTMusicSearcher:
         artist_name: str,
         limit: int = 65,
         thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
         include_audio_url: bool = True,
         include_album_art: bool = True
     ) -> Generator[Dict[str, Any], None, None]:
@@ -1581,49 +1617,71 @@ class YTMusicRelatedFetcher:
             'Accept-Encoding': 'gzip, deflate, br'
         }
 
-    def get_audio_url(self, video_id: str, quality: AudioQuality) -> Optional[str]:
+    def get_audio_url(self, video_id: str, quality: AudioQuality = None) -> Optional[str]:
         format_strategies = [
             "bestaudio[ext=m4a]/bestaudio[ext=mp4]/best[ext=m4a]/best[ext=mp4]",
             "251/250/249/140/139/171/18/22",
             "bestaudio/best",
             "worstaudio/worst"
         ]
-        
+
         for format_selector in format_strategies:
             try:
                 ydl = self._get_ytdlp_instance(format_selector)
                 time.sleep(random.uniform(0.5, 1.5))
-                
+
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}",
                     download=False,
                     process=False
                 )
                 info = ydl.process_ie_result(info, download=False)
-                
+
                 if info.get('is_live') or info.get('availability') == 'unavailable':
                     continue
-                
+
                 if info.get('drm') or any(f.get('drm') for f in info.get('formats', [])):
                     continue
-                
+
                 requested_formats = info.get('requested_formats', [info])
                 formats = info.get('formats', requested_formats)
-                
+
                 audio_formats = [
-                    f for f in formats 
-                    if f.get('acodec') != 'none' 
+                    f for f in formats
+                    if f.get('acodec') != 'none'
                     and f.get('url')
                     and not any(x in f['url'].lower() for x in ["manifest", ".m3u8"])
                 ]
-                
+
                 if not audio_formats:
                     continue
-                
+
+                # Sort formats by audio bitrate (highest first)
                 audio_formats.sort(key=lambda f: f.get('abr', 0) or f.get('tbr', 0) or 0, reverse=True)
-                return audio_formats[0]['url']
-                        
-            except yt_dlp.utils.DownloadError as e:
+
+                # Try to find formats in this priority: 320 > 256 > 128
+                for target_bitrate in [320, 256, 128]:
+                    for fmt in audio_formats:
+                        current_bitrate = fmt.get('abr', 0) or fmt.get('tbr', 0) or 0
+                        if current_bitrate >= target_bitrate * 0.9:  # Allow 10% tolerance
+                            quality_found = None
+                            if current_bitrate >= 290:  # ~320kbps
+                                quality_found = "320kbps"
+                            elif current_bitrate >= 230:  # ~256kbps
+                                quality_found = "256kbps"
+                            else:  # ~128kbps
+                                quality_found = "128kbps"
+                            
+                            print(f"🎵 Found audio at {quality_found} (actual: {current_bitrate:.0f}kbps)")
+                            return fmt['url']
+
+                # If no high quality formats found, return the best available
+                if audio_formats:
+                    current_bitrate = audio_formats[0].get('abr', 0) or audio_formats[0].get('tbr', 0) or 0
+                    print(f"⚠️ Using best available audio: {current_bitrate:.0f}kbps")
+                    return audio_formats[0]['url']
+
+            except yt_dlp.DownloadError as e:
                 if "HTTP Error 403" in str(e):
                     time.sleep(2)
                     continue
@@ -1635,8 +1693,37 @@ class YTMusicRelatedFetcher:
                 continue
             except Exception:
                 continue
-        
+
+        print("❌ No suitable audio formats found")
         return None
+
+    def _get_ytmusic_stream(self, video_id: str) -> Optional[str]:
+        """Try to get high quality stream directly from YouTube Music"""
+        try:
+            song_info = self.ytmusic.get_song(video_id)
+            if song_info:
+                # Check for streaming data in the song info
+                streaming_data = song_info.get('streamingData', {})
+                if streaming_data:
+                    # Prefer adaptive formats for higher quality
+                    formats = streaming_data.get('adaptiveFormats', [])
+                    for fmt in formats:
+                        if fmt.get('mimeType', '').startswith('audio/'):
+                            return fmt.get('url')
+        except Exception as e:
+            print(f"⚠️ YouTube Music stream fetch failed: {str(e)}")
+        return None
+
+    def _get_quality_label(self, fmt: dict) -> str:
+        """Determine quality label based on format properties"""
+        bitrate = fmt.get('abr', 0) or fmt.get('tbr', 0) or 0
+        codec = (fmt.get('acodec') or '').lower()
+        
+        if bitrate >= 256 or 'opus' in codec:
+            return "HIGH"
+        elif bitrate >= 128:
+            return "MEDIUM"
+        return "LOW"
     
     def get_hq_album_art_from_ytdlp(self, video_id: str) -> Optional[str]:
         """
@@ -1819,7 +1906,7 @@ class YTMusicRelatedFetcher:
         artist_name: str,
         limit: int = 65,
         thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
         include_audio_url: bool = True,
         include_album_art: bool = True
     ) -> Generator[dict, None, None]:
