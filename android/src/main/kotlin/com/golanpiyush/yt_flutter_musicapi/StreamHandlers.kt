@@ -57,7 +57,7 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                 
                 val limit = args["limit"] as? Int ?: 50
                 val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH" 
-                val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                val audioQuality = args["audioQuality"] as? String ?: "VERY_HIGH"
                 val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
                 val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
 

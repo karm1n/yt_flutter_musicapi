@@ -5,11 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-[3.3.2]
+[3.3.3]
+
+`Active & Working`
 
 ## Fixed
 
-`NOW_WORKING` 
+- Minor Patches to `handleInitialization`, `handlePythonInitialization`, `handleDispose`
+- Fixed the results mixup issues by properly improving cancellations
+
+[3.3.2]
+
+`Active & Working`
+
+## Fixed
+
 - Ensured robust per-search cancellation by tracking and checking the latest active search ID for each stream type.
 
 - Added a final guard in both Kotlin and Python to prevent yielding or emitting results from any previous/cancelled stream.
@@ -69,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.2.1]
 
+`NOT_WORKING-EOM`
+
 ### Added
 
 - Added proper streaminghandlers for (search, related songs, artist songs, song details)
@@ -87,6 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.1.1]
 
+`Active & Working`
+
 ### Fixed
 
 - Added proper python generator results inspector for all stream operations (search, related songs, artist songs, song details)
@@ -97,6 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## [3.1.0]
+
+`NOT_WORKING-EOM`
 
 ### Fixed
 
@@ -111,6 +127,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clean up event sinks properly
 
 ## [3.0.0]
+
+`Active & Working`
 
 ### Added
 - Support of fetching Artist Songs `requires artistName="Obviously"`
@@ -165,10 +183,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.1.5]
 
+`Deprecated — EOS`
+
 ### Updated
 - Updated `README.md` for the package.
 
 ## [2.1.4]
+
+`Deprecated — EOS`
 
 ### Added
 -Introduced `streamSearchResults` functionality for real-time streaming of search results.
@@ -176,10 +198,14 @@ This allows incremental delivery of song metadata instead of waiting for the ent
 
 ## [1.1.4]
 
+`Deprecated — EOS`
+
 ### Fixed
 - Resolved issues in the Python mock/testing environment used during development.
 
 ## [1.1.3]
+
+`Deprecated — EOS`
 
 ### Fixed
 - Corrected thumbnail quality mappings in the Python layer.
@@ -190,6 +216,8 @@ This allows incremental delivery of song metadata instead of waiting for the ent
 
 ## [1.1.2]
 
+`Deprecated — EOS`
+
 ### Fixed
 - Addressed a memory overflow issue triggered by `searchMusic` and `getRelatedSongs`.
 
@@ -199,10 +227,14 @@ This allows incremental delivery of song metadata instead of waiting for the ent
 
 ## [1.0.2]
 
+`Deprecated — EOS`
+
 ### Fixed
 - Corrected a Kotlin syntax error near `line 441` that was preventing builds.
 
 ## [1.0.1]
+
+`Deprecated — EOS`
 
 ### Added
 - Updated outdated documentation link in `pubspec.yaml`.
@@ -214,6 +246,8 @@ This allows incremental delivery of song metadata instead of waiting for the ent
 ---
 
 ## [1.0.0]
+
+`Deprecated — EOS`
 
 ### Added
 - Initial stable release.

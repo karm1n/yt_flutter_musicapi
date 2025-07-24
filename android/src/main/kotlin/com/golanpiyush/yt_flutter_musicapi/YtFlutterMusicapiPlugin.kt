@@ -12,9 +12,12 @@ import com.chaquo.python.android.AndroidPlatform
 import com.chaquo.python.PyObject
 import android.content.Context
 import android.util.Log
+import android.icu.util.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeoutException
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.golanpiyush.yt_flutter_musicapi.SearchStreamHandler
@@ -121,48 +124,273 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
     private fun handleCheckStatus(result: Result) {
         coroutineScope.launch {
             try {
-                if (pythonModule == null) {
+                Log.d(TAG, "Checking status...")
+                
+                // Force initialization if components are missing
+                if (pythonModule == null || musicSearcher == null || relatedFetcher == null) {
+                    Log.d(TAG, "Components missing, forcing reinitialization...")
                     initializePython()
                 }
-            
+                
                 val statusResult = pythonModule!!.callAttr("check_ytmusic_and_ytdlp_ready")
                 val statusMap = convertPythonDictToMap(statusResult)
-            
+                
+                // Add our own status info
+                val enhancedStatus = statusMap.toMutableMap().apply {
+                    put("python_initialized", python != null)
+                    put("module_loaded", pythonModule != null)
+                    put("searcher_ready", musicSearcher != null)
+                    put("related_fetcher_ready", relatedFetcher != null)
+                    put("cache_size", instanceCache.size)
+                }
+                
+                Log.d(TAG, "Status check completed: $enhancedStatus")
+                
                 withContext(Dispatchers.Main) {
-                    result.success(statusMap)
+                    result.success(enhancedStatus)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Status check failed", e)
                 withContext(Dispatchers.Main) {
-                    result.error("STATUS_ERROR", "Failed to check status: ${e.message}", null)
+                    result.error("STATUS_ERROR", "Failed to check status: ${e.message}", mapOf(
+                        "success" to false,
+                        "error" to e.message,
+                        "python_started" to Python.isStarted(),
+                        "stackTrace" to Log.getStackTraceString(e)
+                    ))
                 }
             }
         }
     }
 
     private fun initializePython() {
-        try {
-            if (!Python.isStarted()) {
-                Python.start(AndroidPlatform(context))
-            }
-            python = Python.getInstance()
-            
-            pythonModule = python?.getModule("globalsearcher") 
-                ?: throw IllegalStateException("Failed to import globalsearcher module")
-                
-            musicSearcher = pythonModule?.callAttr("YTMusicSearcher", null, "US")
-            relatedFetcher = pythonModule?.callAttr("YTMusicRelatedFetcher", null, "US")
-            
-            if (musicSearcher == null || relatedFetcher == null) {
-                throw IllegalStateException("Failed to initialize music searchers")
-            }
-            
-            Log.d(TAG, "Python initialized successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "Python initialization failed", e)
-            throw e
+    try {
+        Log.d(TAG, "=== Starting Python Initialization ===")
+        Log.d(TAG, "Current state - Python: ${python != null}, Module: ${pythonModule != null}, Searcher: ${musicSearcher != null}")
+        
+        // Always force complete cleanup before reinitializing
+        Log.d(TAG, "Performing aggressive cleanup...")
+        
+        // Clean up existing objects
+        try { 
+            musicSearcher?.callAttr("SearchStreamsCleanup")
+            Log.d(TAG, "musicSearcher cleanup called")
+        } catch (e: Exception) { 
+            Log.d(TAG, "musicSearcher cleanup not available: ${e.message}")
         }
+        
+        try { 
+            relatedFetcher?.callAttr("RelatedStreamCleanup")
+            Log.d(TAG, "relatedFetcher cleanup called")
+        } catch (e: Exception) { 
+            Log.d(TAG, "relatedFetcher cleanup not available: ${e.message}")
+        }
+        
+        // Close references
+        try { musicSearcher?.close() } catch (e: Exception) { /* ignore */ }
+        try { relatedFetcher?.close() } catch (e: Exception) { /* ignore */ }
+        try { pythonModule?.close() } catch (e: Exception) { /* ignore */ }
+        
+        musicSearcher = null
+        relatedFetcher = null
+        pythonModule = null
+        
+        Log.d(TAG, "Starting fresh Python initialization...")
+        
+        // Initialize Python if not started
+        if (!Python.isStarted()) {
+            Log.d(TAG, "Starting Python interpreter...")
+            Python.start(AndroidPlatform(context))
+            Log.d(TAG, "Python interpreter started successfully")
+        } else {
+            Log.d(TAG, "Python interpreter already started")
+        }
+        
+        // Get Python instance
+        Log.d(TAG, "Getting Python instance...")
+        python = Python.getInstance()
+        Log.d(TAG, "Python instance obtained: ${python != null}")
+        
+        // Force aggressive garbage collection
+        Log.d(TAG, "Running aggressive Python cleanup...")
+        try {
+            python?.getModule("gc")?.callAttr("collect")
+            // Force multiple GC cycles
+            repeat(3) {
+                python?.getModule("gc")?.callAttr("collect")
+            }
+            Log.d(TAG, "Python garbage collection completed")
+        } catch (e: Exception) {
+            Log.w(TAG, "Python garbage collection failed: ${e.message}")
+        }
+        
+        // Clear module from sys.modules and force reimport
+        Log.d(TAG, "Clearing module from sys.modules...")
+        try {
+            val sysModule = python?.getModule("sys")
+            val modules = sysModule?.get("modules")
+            
+            // Remove all related modules
+            val moduleNames = listOf("globalsearcher", "ytmusicapi", "yt_dlp")
+            for (modName in moduleNames) {
+                try {
+                    if (modules?.callAttr("__contains__", modName)?.toBoolean() == true) {
+                        modules.callAttr("__delitem__", modName)
+                        Log.d(TAG, "Removed $modName from sys.modules")
+                    }
+                } catch (e: Exception) {
+                    Log.d(TAG, "Could not remove $modName: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Module cleanup failed: ${e.message}")
+        }
+        
+        // Wait a bit for cleanup to complete
+        Thread.sleep(1000)
+        
+        // Import the module with timeout using ExecutorService
+        Log.d(TAG, "Loading globalsearcher module with timeout...")
+        val moduleExecutor = Executors.newSingleThreadExecutor()
+        try {
+            pythonModule = try {
+                val future = moduleExecutor.submit<PyObject?> {
+                    var lastException: Exception? = null
+                    
+                    // Try multiple import strategies
+                    val strategies = listOf(
+                        "Direct import" to { python?.getModule("globalsearcher") },
+                        "Exec import" to { 
+                            python?.getBuiltins()?.callAttr("exec", "import globalsearcher")
+                            python?.getModule("globalsearcher")
+                        },
+                        "__import__ builtin" to {
+                            python?.getBuiltins()?.callAttr("__import__", "globalsearcher")
+                            python?.getModule("globalsearcher")
+                        }
+                    )
+                    
+                    for ((strategyName, strategy) in strategies) {
+                        try {
+                            Log.d(TAG, "Trying strategy: $strategyName")
+                            val result = strategy()
+                            if (result != null) {
+                                Log.d(TAG, "Strategy '$strategyName' succeeded")
+                                return@submit result
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Strategy '$strategyName' failed: ${e.message}")
+                            lastException = e
+                            
+                            // Wait between strategies
+                            Thread.sleep(500)
+                        }
+                    }
+                    
+                    throw lastException ?: IllegalStateException("All import strategies failed")
+                }
+                future.get(20, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: TimeoutException) {
+                throw Exception("Module import timed out after 20 seconds", e)
+            } catch (e: ExecutionException) {
+                throw Exception("Module import failed", e.cause ?: e)
+            }
+        } finally {
+            moduleExecutor.shutdown()
+            try {
+                if (!moduleExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    moduleExecutor.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
+                moduleExecutor.shutdownNow()
+                Thread.currentThread().interrupt()
+            }
+        }
+        
+        Log.d(TAG, "globalsearcher module loaded successfully")
+        
+        // Create YTMusicSearcher instance with timeout
+        Log.d(TAG, "Creating fresh YTMusicSearcher instance...")
+        val searcherExecutor = Executors.newSingleThreadExecutor()
+        try {
+            musicSearcher = try {
+                val future = searcherExecutor.submit<PyObject?> {
+                    pythonModule?.callAttr("YTMusicSearcher", null, "US")
+                }
+                future.get(15, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: TimeoutException) {
+                throw Exception("YTMusicSearcher creation timed out after 15 seconds", e)
+            } catch (e: ExecutionException) {
+                throw Exception("YTMusicSearcher creation failed", e.cause ?: e)
+            }
+        } finally {
+            searcherExecutor.shutdown()
+            try {
+                if (!searcherExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    searcherExecutor.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
+                searcherExecutor.shutdownNow()
+                Thread.currentThread().interrupt()
+            }
+        }
+        Log.d(TAG, "YTMusicSearcher created: ${musicSearcher != null}")
+        
+        // Create YTMusicRelatedFetcher instance with timeout
+        Log.d(TAG, "Creating fresh YTMusicRelatedFetcher instance...")
+        val fetcherExecutor = Executors.newSingleThreadExecutor()
+        try {
+            relatedFetcher = try {
+                val future = fetcherExecutor.submit<PyObject?> {
+                    pythonModule?.callAttr("YTMusicRelatedFetcher", null, "US")
+                }
+                future.get(15, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: TimeoutException) {
+                throw Exception("YTMusicRelatedFetcher creation timed out after 15 seconds", e)
+            } catch (e: ExecutionException) {
+                throw Exception("YTMusicRelatedFetcher creation failed", e.cause ?: e)
+            }
+        } finally {
+            fetcherExecutor.shutdown()
+            try {
+                if (!fetcherExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    fetcherExecutor.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
+                fetcherExecutor.shutdownNow()
+                Thread.currentThread().interrupt()
+            }
+        }
+        Log.d(TAG, "YTMusicRelatedFetcher created: ${relatedFetcher != null}")
+        
+        if (musicSearcher == null || relatedFetcher == null) {
+            throw IllegalStateException("Failed to initialize music searchers - musicSearcher: ${musicSearcher != null}, relatedFetcher: ${relatedFetcher != null}")
+        }
+        
+        Log.d(TAG, "=== Python initialization completed successfully ===")
+        
+    } catch (e: Exception) {
+        Log.e(TAG, "=== Python initialization FAILED ===", e)
+        Log.e(TAG, "Error details: ${e.message}")
+        Log.e(TAG, "Stack trace: ${Log.getStackTraceString(e)}")
+        
+        // Clean up partial initialization
+        try { musicSearcher?.close() } catch (ex: Exception) { 
+            Log.w(TAG, "Error closing musicSearcher during cleanup: ${ex.message}")
+        }
+        try { relatedFetcher?.close() } catch (ex: Exception) { 
+            Log.w(TAG, "Error closing relatedFetcher during cleanup: ${ex.message}")
+        }
+        try { pythonModule?.close() } catch (ex: Exception) { 
+            Log.w(TAG, "Error closing pythonModule during cleanup: ${ex.message}")
+        }
+        
+        musicSearcher = null
+        relatedFetcher = null
+        pythonModule = null
+        throw e
     }
+}
 
     private fun handleInitialize(call: MethodCall, result: Result) {
         coroutineScope.launch {
@@ -170,40 +398,79 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                 val proxy = call.argument<String>("proxy")
                 val country = call.argument<String>("country") ?: "US"
                 
-                if (pythonModule == null) {
+                Log.d(TAG, "Initialize called with proxy: $proxy, country: $country")
+                
+                // Add timeout to prevent hanging
+                withTimeout(30_000) { // 30 second timeout
+                    // Force reinitialization of Python components
                     initializePython()
                 }
+                
+                // Clear instance cache to force fresh instances
+                instanceCache.clear()
                 
                 val searcherKey = "searcher_${proxy}_${country}"
                 val relatedKey = "related_${proxy}_${country}"
                 
-                musicSearcher = instanceCache.getOrPut(searcherKey) {
-                    if (proxy != null) {
-                        pythonModule!!.callAttr("YTMusicSearcher", proxy, country)
-                    } else {
-                        pythonModule!!.callAttr("YTMusicSearcher", null, country)
-                    }
+                Log.d(TAG, "Creating new instances with key: $searcherKey")
+                
+                musicSearcher = if (proxy != null) {
+                    pythonModule!!.callAttr("YTMusicSearcher", proxy, country)
+                } else {
+                    pythonModule!!.callAttr("YTMusicSearcher", null, country)
                 }
                 
-                relatedFetcher = instanceCache.getOrPut(relatedKey) {
-                    if (proxy != null) {
-                        pythonModule!!.callAttr("YTMusicRelatedFetcher", proxy, country)
-                    } else {
-                        pythonModule!!.callAttr("YTMusicRelatedFetcher", null, country)
-                    }
+                relatedFetcher = if (proxy != null) {
+                    pythonModule!!.callAttr("YTMusicRelatedFetcher", proxy, country)
+                } else {
+                    pythonModule!!.callAttr("YTMusicRelatedFetcher", null, country)
                 }
+                
+                // Cache the instances
+                instanceCache[searcherKey] = musicSearcher!!
+                instanceCache[relatedKey] = relatedFetcher!!
+                
+                Log.d(TAG, "Initialization successful")
                 
                 withContext(Dispatchers.Main) {
                     result.success(mapOf(
                         "success" to true,
-                        "message" to "YTMusic API initialized successfully"
+                        "message" to "YTMusic API initialized successfully",
+                        "proxy" to proxy,
+                        "country" to country
                     ))
                 }
                 
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Initialization timed out after 30 seconds")
+                
+                // Clean up on timeout
+                musicSearcher = null
+                relatedFetcher = null
+                pythonModule = null
+                instanceCache.clear()
+                
+                withContext(Dispatchers.Main) {
+                    result.error("INIT_TIMEOUT", "Initialization timed out - Python module may be stuck", mapOf(
+                        "success" to false,
+                        "error" to "Timeout after 30 seconds",
+                        "suggestion" to "Try restarting the app"
+                    ))
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to initialize YTMusic API", e)
+                
+                // Clean up on failure
+                musicSearcher = null
+                relatedFetcher = null
+                instanceCache.clear()
+                
                 withContext(Dispatchers.Main) {
-                    result.error("INIT_ERROR", "Failed to initialize: ${e.message}", null)
+                    result.error("INIT_ERROR", "Failed to initialize: ${e.message}", mapOf(
+                        "success" to false,
+                        "error" to e.message,
+                        "stackTrace" to Log.getStackTraceString(e)
+                    ))
                 }
             }
         }
@@ -731,13 +998,72 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
 
     private fun handleDispose(result: Result) {
         try {
-            coroutineScope.cancel()
-            instanceCache.clear()
-            threadPoolExecutor.shutdown()
+            Log.d(TAG, "Starting dispose process...")
             
+            // Cancel all coroutines first
+            coroutineScope.cancel()
+            job.cancel()
+            
+            // Clear caches
+            instanceCache.clear()
+            searchManager.dispose() // Now this method exists
+            
+            // Shutdown thread pool
+            threadPoolExecutor.shutdown()
+            try {
+                if (!threadPoolExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                    threadPoolExecutor.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
+                threadPoolExecutor.shutdownNow()
+            }
+            
+            // Clean up Python objects explicitly
+            try {
+                // Try to call cleanup method if it exists
+                musicSearcher?.callAttr("SearchStreamsCleanup")
+            } catch (e: Exception) {
+                Log.d(TAG, "musicSearcher cleanup method not available or failed: ${e.message}")
+            }
+            
+            try {
+                // Try to call cleanup method if it exists
+                relatedFetcher?.callAttr("RelatedStreamCleanup")
+            } catch (e: Exception) {
+                Log.d(TAG, "relatedFetcher cleanup method not available or failed: ${e.message}")
+            }
+            
+            // Clear Python references (close() releases the Python object reference)
+            try {
+                musicSearcher?.close()
+                Log.d(TAG, "musicSearcher reference closed")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing musicSearcher reference", e)
+            }
+            
+            try {
+                relatedFetcher?.close()
+                Log.d(TAG, "relatedFetcher reference closed")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing relatedFetcher reference", e)
+            }
+            
+            try {
+                pythonModule?.close()
+                Log.d(TAG, "pythonModule reference closed")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing pythonModule reference", e)
+            }
+            
+            // Nullify references
             musicSearcher = null
             relatedFetcher = null
             pythonModule = null
+            
+            // Force Python garbage collection
+            python?.getModule("gc")?.callAttr("collect")
+            
+            Log.d(TAG, "Dispose completed successfully")
             
             result.success(mapOf(
                 "success" to true,
@@ -749,6 +1075,7 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
             result.error("DISPOSE_ERROR", "Failed to dispose: ${e.message}", null)
         }
     }
+
 
     internal  fun getPythonThumbnailQuality(quality: String): PyObject {
         return try {

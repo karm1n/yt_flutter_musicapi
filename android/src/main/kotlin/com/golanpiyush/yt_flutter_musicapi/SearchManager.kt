@@ -169,7 +169,20 @@ class SearchManager {
             return cleanedCount
         }
     }
-
+    
+    fun dispose() {
+        synchronized(lock) {
+            Log.d("YTMusicAPI", "Disposing SearchManager...")
+            
+            // Cancel all active searches
+            val cancelledCount = cancelAll()
+            
+            // Clear the latest search IDs tracking
+            latestSearchIdsByType.clear()
+            
+            Log.d("YTMusicAPI", "SearchManager disposed. Cancelled $cancelledCount searches.")
+        }
+    }
 
     
 
