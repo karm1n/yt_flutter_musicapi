@@ -868,127 +868,88 @@ class YTMusicSearcher:
         include_audio_url: bool = True,
         include_album_art: bool = True
     ) -> Generator[dict, None, None]:
-        """
-        Stream music search results with cancellation support.
-
-        Fixes:
-        ✅ Ensures generator exits mid-way during cancellation
-        ✅ Adds checks before and after blocking calls
-        ✅ Prevents cross-stream mixing issues (with final yield guard)
-        """
         import time
-
         inspector = SearchInspector.get_instance()
         search_id = f"search_{hash(query)}_{int(time.time())}"
 
         def generator():
             try:
-                print(f"PythonEngine: Starting generator for query: {query}")
+                if not inspector.is_active(search_id):
+                    print(f"[{search_id}] Cancelled before starting")
+                    return
+
+                print(f"✨ Streaming search for: {query}")
+                results = None
                 processed_count = 0
                 skipped_count = 0
                 max_attempts = limit * 3
 
-                results = None
                 for attempt in range(3):
                     if not inspector.is_active(search_id):
-                        print("PythonEngineInspector: CANCELLED during search attempts")
+                        print("Cancelled before search")
                         return
-
                     try:
-                        print(f"PythonEngine: Attempt {attempt + 1} to search...")
                         results = self.ytmusic.search(query, filter="songs", limit=max_attempts)
-                        print(f"PythonEngine: SearchSong returned {len(results) if results else 0} results")
+                        print(f"🔎 Fetched {len(results)} results")
                         break
                     except Exception as e:
-                        print(f"Search attempt {attempt + 1} failed: {e}")
+                        print(f"⚠️ Search error: {e}")
                         if attempt == 2:
-                            print("All search attempts failed.")
                             return
                         time.sleep(2 ** attempt)
                         self._initialize_ytmusic()
 
                 if not results:
-                    print("No results found for SearchSong")
                     return
 
-                print(f"PythonEngine: Processing {len(results)} search results...")
-
-                for i, item in enumerate(results):
+                for item in results:
                     if not inspector.is_active(search_id):
-                        print("CANCELLED before processing item")
                         return
-
                     if processed_count >= limit:
-                        print(f"Reached item limit of {limit}")
                         break
 
-                    try:
-                        video_id = item.get("videoId")
-                        if not video_id:
-                            skipped_count += 1
-                            continue
-
-                        title = item.get("title", "Unknown Title")
-                        artists = ", ".join(a.get("name", "Unknown") for a in item.get("artists", [])) or "Unknown Artist"
-                        duration = item.get("duration")
-                        year = item.get("year")
-
-                        print(f"Processing song: {title} by {artists}")
-
-                        if not inspector.is_active(search_id):
-                            print("CANCELLED before song data build")
-                            return
-
-                        song_data = self._build_song_data(
-                            video_id=video_id,
-                            title=title,
-                            artists=artists,
-                            duration=duration,
-                            song_data=item,
-                            thumb_quality=thumb_quality,
-                            audio_quality=audio_quality,
-                            include_audio_url=include_audio_url,
-                            include_album_art=include_album_art,
-                            year=year
-                        )
-
-                        # ✅ Critical final guard before yield
-                        if not inspector.is_active(search_id):
-                            print("CANCELLED after song data build — skipping yield")
-                            return
-
-                        should_yield = not include_audio_url or song_data.get("audioUrl")
-                        print(f"PythonEngineInspector: Yield guard check — should_yield: {should_yield}")
-
-                        if should_yield:
-                            processed_count += 1
-                            print(f"Yielding song {processed_count}: {title}")
-                            yield song_data
-                        else:
-                            skipped_count += 1
-
-                    except Exception as e:
-                        print(f"Error processing item {i + 1}: {e}")
+                    video_id = item.get("videoId")
+                    if not video_id:
                         skipped_count += 1
                         continue
 
-                print(f"Finished streaming. Yielded: {processed_count}, Skipped: {skipped_count}")
+                    title = item.get("title", "Unknown")
+                    artists = ", ".join([a.get("name", "Unknown") for a in item.get("artists", [])]) or "Unknown Artist"
 
+                    song_data = self._build_song_data(
+                        video_id=video_id,
+                        title=title,
+                        artists=artists,
+                        duration=item.get("duration"),
+                        song_data=item,
+                        thumb_quality=thumb_quality,
+                        audio_quality=audio_quality,
+                        include_audio_url=include_audio_url,
+                        include_album_art=include_album_art,
+                        year=item.get("year")
+                    )
+
+                    if not inspector.is_active(search_id):
+                        return
+
+                    if not include_audio_url or song_data.get("audioUrl"):
+                        print(f"✅ Yielding {processed_count + 1}: {title}")
+                        yield song_data
+                        processed_count += 1
+                    else:
+                        skipped_count += 1
             except GeneratorExit:
-                print("Generator closed (GeneratorExit)")
-                raise
-            except Exception as e:
-                print(f"Unexpected generator error: {e}")
+                print("🔚 Generator closed (music search)")
                 raise
 
-        # Register generator and yield
         gen = generator()
         inspector.register_search(search_id, "music_search", gen)
-
         try:
             yield from gen
         finally:
             inspector.cancel_search(search_id)
+
+
 
 
 
@@ -1374,130 +1335,84 @@ class YTMusicSearcher:
         inspector = SearchInspector.get_instance()
         search_id = f"artist_{hash(artist_name)}_{int(time.time())}"
 
-        # ✅ Define and register generator BEFORE doing any active check
         def generator():
             try:
-                print(f"PythonEngine: 🎤 Starting ArtistSongs for: {artist_name}")
-                processed_count = 0
+                print(f"🎤 Fetching artist songs for: {artist_name}")
                 retry_count = 0
+                processed_count = 0
                 max_retries = 3
 
                 while retry_count < max_retries and processed_count < limit:
                     if not inspector.is_active(search_id):
-                        print(f"🔴 [{search_id}] ArtistSongs CANCELLED before search attempt")
                         return
-
                     try:
-                        artist_results = self.ytmusic.search(artist_name, filter="artists", limit=limit)
-                        if not artist_results:
-                            print("⚠️ ArtistSongs: No artist results found")
-                            return
+                        results = self.ytmusic.search(artist_name, filter="artists", limit=limit)
+                        target = next((r for r in results if r.get("artist", "").lower() == artist_name.lower()), results[0])
+                        browse_id = target.get("browseId")
 
-                        target_artist = next(
-                            (a for a in artist_results if a.get('artist', '').lower() == artist_name.lower()),
-                            artist_results[0]
-                        )
-                        browse_id = target_artist.get("browseId")
-                        if not browse_id:
-                            print("❌ ArtistSongs: No browseId available for artist")
-                            return
+                        artist_data = self.ytmusic.get_artist(browse_id)
+                        song_items = artist_data.get("songs", {}).get("results", []) or []
 
-                        artist_info = self.ytmusic.get_artist(browse_id)
-                        song_items = []
-
-                        if 'songs' in artist_info:
-                            results = artist_info['songs']
-                            song_items.extend(
-                                results.get('results', []) if isinstance(results, dict) else results
-                            )
-
-                        # Fallback: load albums
-                        if not song_items and 'albums' in artist_info:
-                            for album in artist_info['albums'].get('results', [])[:3]:
+                        if not song_items and "albums" in artist_data:
+                            for album in artist_data["albums"].get("results", [])[:3]:
                                 if not inspector.is_active(search_id):
-                                    print("🔴 CANCELLED during album loading")
                                     return
-                                tracks = self.ytmusic.get_album(album['browseId']).get('tracks', [])
-                                song_items.extend(tracks)
+                                album_tracks = self.ytmusic.get_album(album["browseId"]).get("tracks", [])
+                                song_items.extend(album_tracks)
 
-                        print(f"ArtistSongs: Retrieved {len(song_items)} song items")
+                        print(f"📦 {len(song_items)} songs found")
 
-                        for i, song in enumerate(song_items):
+                        for song in song_items:
                             if not inspector.is_active(search_id):
-                                print(f"❌ CANCELLED before item {i} yield")
                                 return
-
                             if processed_count >= limit:
-                                print("✅ ArtistSongs: Limit reached")
                                 break
-
-                            video_id = song.get("videoId")
-                            if not video_id:
+                            vid = song.get("videoId")
+                            if not vid:
                                 continue
 
-                            title = song.get("title", "Unknown Title")
-                            artists = ", ".join(a.get("name", "Unknown") for a in song.get("artists", [])) or artist_name
-                            duration = song.get("duration")
-
-                            # Before building data
-                            if not inspector.is_active(search_id):
-                                print(f"🔴 CANCELLED pre _build_song_data")
-                                return
-
+                            title = song.get("title", "Unknown")
+                            artists = ", ".join(a.get("name") for a in song.get("artists", [])) or artist_name
                             song_data = self._build_song_data(
-                                video_id=video_id,
+                                video_id=vid,
                                 title=title,
                                 artists=artists,
-                                duration=duration,
+                                duration=song.get("duration"),
                                 song_data=song,
                                 thumb_quality=thumb_quality,
                                 audio_quality=audio_quality,
-                                include_audio_url=include_audio_url,
                                 include_album_art=include_album_art,
+                                include_audio_url=include_audio_url,
                                 year=song.get("year"),
                                 artist_name=artist_name
                             )
 
-                            if not inspector.is_active(search_id):
-                                print("🔴 CANCELLED after _build_song_data")
-                                return
-
                             if not include_audio_url or song_data.get("audioUrl"):
                                 if not inspector.is_active(search_id):
-                                    print("❌ Final CANCEL guard before yield — skipping stale")
                                     return
-
                                 processed_count += 1
-                                print(f"✅ Yielding song {processed_count}: {title}")
+                                print(f"🎵 Yielding {processed_count}: {title}")
                                 yield song_data
-
-                        break  # Exit on success
-
+                        break
                     except Exception as e:
                         retry_count += 1
-                        print(f"⚠️ ArtistSongs retry {retry_count}/{max_retries} failed: {e}")
-                        if retry_count < max_retries:
-                            time.sleep(2 ** retry_count)
-                            self._initialize_ytmusic()
-                        else:
+                        if retry_count >= max_retries:
+                            print(f"❌ Failed after {retry_count} retries: {e}")
                             return
+                        self._initialize_ytmusic()
+                        time.sleep(2 ** retry_count)
 
             except GeneratorExit:
-                print(f"🛑 ArtistSongs generator closed via GeneratorExit [{search_id}]")
+                print("🎤 ArtistSongs generator closed")
                 raise
 
-            except Exception as e:
-                print(f"🛑 Unexpected ArtistSongs generator error: {e}")
-                raise
-
-        # ✅ Now register early — before yield starts
         gen = generator()
         inspector.register_search(search_id, "artist_songs", gen)
-
         try:
             yield from gen
         finally:
             inspector.cancel_search(search_id)
+
 
 
 
@@ -1885,7 +1800,6 @@ class YTMusicRelatedFetcher:
                     return
 
                 if not inspector.is_active(search_id):
-                    print("❌ Cancelled before searching song video ID")
                     return
 
                 print(f"🔍 Searching video ID for: {song_name} by {artist_name}")
@@ -1896,130 +1810,98 @@ class YTMusicRelatedFetcher:
                     return
 
                 if not inspector.is_active(search_id):
-                    print("❌ Cancelled after video ID resolution")
                     return
 
-                print(f"✅ Found video ID: {video_id}")
                 video_info = self.get_video_info(video_id)
-
                 if not video_info or not video_info.get("related_tracks"):
                     print("❌ No related tracks found")
-                    return
-
-                if not inspector.is_active(search_id):
-                    print("❌ Cancelled after video info fetch")
                     return
 
                 related_tracks = video_info["related_tracks"]
                 processed_count = 0
                 skipped_count = 0
 
-                print(f"🎧 Processing {len(related_tracks)} related tracks")
+                print(f"🎧 Processing up to {limit} related tracks")
 
                 for item in related_tracks:
-                    if not inspector.is_active(search_id):
-                        print("❌ Cancelled during related track iteration")
-                        return
-
                     if processed_count >= limit:
+                        print(f"🔁 Reached limit of {limit}, stopping")
                         break
 
-                    try:
-                        track_video_id = item.get("videoId")
-                        if not track_video_id or track_video_id == video_id:
-                            skipped_count += 1
-                            continue
+                    if not inspector.is_active(search_id):
+                        return
 
-                        title = item.get("title", "Unknown Title")
-                        artists = ", ".join(a.get("name", "Unknown") for a in item.get("artists", [])) or "Unknown Artist"
-                        duration = item.get("length", "N/A")
-
-                        # ✅ Album art
-                        album_art = ""
-                        if include_album_art:
-                            if not inspector.is_active(search_id):
-                                print("❌ Cancelled before album art processing")
-                                return
-
-                            try:
-                                album_art = self.get_youtube_music_album_art(track_video_id)
-
-                                if not album_art and inspector.is_active(search_id):
-                                    album_art = self.get_hq_album_art_from_ytdlp(track_video_id)
-
-                                if not album_art:
-                                    thumbnails = item.get("thumbnail", [])
-                                    if thumbnails:
-                                        base_url = thumbnails[-1].get("url", "")
-                                        if base_url:
-                                            if thumb_quality == ThumbnailQuality.HIGH:
-                                                album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
-                                            elif thumb_quality == ThumbnailQuality.VERY_HIGH:
-                                                album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
-                                            else:
-                                                album_art = base_url
-                            except Exception as e:
-                                print(f"⚠️ Failed album art for {track_video_id}: {e}")
-                                album_art = ""
-
-                        # ✅ Audio URL
-                        audio_url = None
-                        if include_audio_url:
-                            for attempt in range(3):
-                                if not inspector.is_active(search_id):
-                                    print("❌ Cancelled during audio URL fetch")
-                                    return
-
-                                audio_url = self.get_audio_url(track_video_id, audio_quality)
-                                if audio_url:
-                                    break
-                                time.sleep(1)
-
-                        # ✅ Final cancel check before yield
-                        if not inspector.is_active(search_id):
-                            print("❌ Cancelled before yielding result")
-                            return
-
-                        if not include_audio_url or audio_url:
-                            song_data = {
-                                "title": title,
-                                "artists": artists,
-                                "videoId": track_video_id,
-                                "duration": duration,
-                                "isOriginal": track_video_id == video_id
-                            }
-                            if include_album_art:
-                                song_data["albumArt"] = album_art
-                            if include_audio_url:
-                                song_data["audioUrl"] = audio_url
-
-                            # ✅ Final check before yielding
-                            if not inspector.is_active(search_id):
-                                print("❌ Cancelled just before final yield (related_songs)")
-                                return
-
-                            processed_count += 1
-                            print(f"✅ Yielding related track {processed_count}: {title}")
-                            yield song_data
-
-                        else:
-                            skipped_count += 1
-
-                    except Exception as e:
-                        print(f"❌ Error processing related track: {e}")
+                    track_video_id = item.get("videoId")
+                    if not track_video_id or track_video_id == video_id:
                         skipped_count += 1
                         continue
 
-                print(f"🎉 Finished related search. Total yielded: {processed_count}, skipped: {skipped_count}")
+                    title = item.get("title", "Unknown Title")
+                    artists = ", ".join(a.get("name", "Unknown") for a in item.get("artists", [])) or "Unknown Artist"
+                    duration = item.get("length", "N/A")
+
+                    album_art = ""
+                    if include_album_art and inspector.is_active(search_id):
+                        try:
+                            album_art = self.get_youtube_music_album_art(track_video_id) or ""
+                            if not album_art:
+                                thumbnails = item.get("thumbnail", [])
+                                if thumbnails:
+                                    base_url = thumbnails[-1].get("url", "")
+                                    if base_url:
+                                        if thumb_quality == ThumbnailQuality.HIGH:
+                                            album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
+                                        elif thumb_quality == ThumbnailQuality.VERY_HIGH:
+                                            album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
+                                        else:
+                                            album_art = base_url
+                        except Exception as e:
+                            print(f"⚠️ Failed to get album art: {e}")
+
+                    audio_url = None
+                    if include_audio_url:
+                        for attempt in range(3):
+                            if not inspector.is_active(search_id):
+                                return
+                            audio_url = self.get_audio_url(track_video_id, audio_quality)
+                            if audio_url:
+                                break
+                            time.sleep(1)
+
+                    if not inspector.is_active(search_id):
+                        return
+
+                    if not include_audio_url or audio_url:
+                        song_data = {
+                            "title": title,
+                            "artists": artists,
+                            "videoId": track_video_id,
+                            "duration": duration,
+                            "isOriginal": False
+                        }
+                        if include_album_art:
+                            song_data["albumArt"] = album_art
+                        if include_audio_url:
+                            song_data["audioUrl"] = audio_url
+
+                        if not inspector.is_active(search_id):
+                            return
+
+                        processed_count += 1
+                        print(f"✅ Yielding related song {processed_count}: {title}")
+                        yield song_data
+                    else:
+                        skipped_count += 1
+
+                print(f"🎉 Related songs done. Yielded: {processed_count}, Skipped: {skipped_count}")
 
             except GeneratorExit:
-                print("🔄 Related generator closed via GeneratorExit")
+                print("🔚 Related generator closed (GeneratorExit)")
                 raise
             except Exception as e:
-                print(f"❌ Unexpected error in related generator: {e}")
+                print(f"❌ Error in getRelated generator: {e}")
                 raise
 
-        # ✅ Create and register the generator
         gen = generator()
         inspector.register_search(search_id, "related_songs", gen)
 
@@ -2027,6 +1909,8 @@ class YTMusicRelatedFetcher:
             yield from gen
         finally:
             inspector.cancel_search(search_id)
+
+
 
 
 

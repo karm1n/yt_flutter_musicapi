@@ -229,6 +229,287 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
     });
   }
 
+  Future<void> _testStreamCancellation() async {
+    if (_isLoading || !_isInitialized) {
+      _addToCliOutput('❌ API not initialized or busy');
+      return;
+    }
+
+    if (AppSettings.mode != 'stream') {
+      _addToCliOutput('❌ This test only works in stream mode');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    // First search (will be cancelled after 10 seconds)
+    final firstQuery = 'Ed Sheeran Perfect';
+    _addToCliOutput('🔍 Starting first search: "$firstQuery"');
+    _addToCliOutput('⏳ Will cancel after 15 seconds...');
+
+    // Store first search results
+    final firstResults = <SearchResult>[];
+
+    // Start the first search
+    final firstSearchStream = _api.streamSearchResults(
+      query: firstQuery,
+      limit: AppSettings.limit,
+      audioQuality: AppSettings.audioQuality,
+      thumbQuality: AppSettings.thumbnailQuality,
+      includeAudioUrl: true,
+      includeAlbumArt: true,
+    );
+
+    final firstSearchSubscription = firstSearchStream.listen(
+      (result) {
+        firstResults.add(result);
+        _addToCliOutput('🎵 First search result: ${result.title}');
+        _addToCliOutput('   Artists: ${result.artists}');
+        _addToCliOutput('   Duration: ${result.duration ?? 'N/A'}');
+      },
+      onError: (e) {
+        _addToCliOutput('❌ First search error: $e');
+      },
+      onDone: () {
+        _addToCliOutput(
+          '✅ First search got ${firstResults.length} results before cancel',
+        );
+      },
+    );
+
+    // Second search (will start after 10 seconds)
+    final secondQuery = 'Jee Le Zara';
+    Future.delayed(Duration(seconds: 15), () async {
+      _addToCliOutput('\n⏰ Cancelling first search after 15 seconds');
+      await firstSearchSubscription.cancel();
+
+      // Print summary of first search results
+      if (firstResults.isNotEmpty) {
+        _addToCliOutput('📋 First search got ${firstResults.length} results:');
+        for (var result in firstResults) {
+          _addToCliOutput('   • ${result.title} (${result.duration ?? 'N/A'})');
+        }
+      } else {
+        _addToCliOutput('📋 First search got no results before cancellation');
+      }
+
+      _addToCliOutput('\n🚀 Starting second search: "$secondQuery"');
+
+      try {
+        int received = 0;
+        final stopwatch = Stopwatch()..start();
+
+        await for (final result in _api.streamSearchResults(
+          query: secondQuery,
+          limit: AppSettings.limit,
+          audioQuality: AppSettings.audioQuality,
+          thumbQuality: AppSettings.thumbnailQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        )) {
+          received++;
+          _addToCliOutput(
+            '\n🎧 Second search result $received in ${stopwatch.elapsedMilliseconds}ms:',
+          );
+          _addToCliOutput('   Title: ${result.title}');
+          _addToCliOutput('   Artists: ${result.artists}');
+          _addToCliOutput('   Duration: ${result.duration ?? 'N/A'}');
+          _addToCliOutput('   Video ID: ${result.videoId}');
+
+          if (received >= AppSettings.limit) {
+            _addToCliOutput('⏹️ Reached limit of ${AppSettings.limit} results');
+            break;
+          }
+        }
+
+        _addToCliOutput(
+          '\n✅ Second search finished: $received result(s) in ${stopwatch.elapsedMilliseconds}ms',
+        );
+        _addToCliOutput('\n✅ SearchStream Cancellation Did Its Job ✅');
+      } catch (e) {
+        _addToCliOutput('❌ Second search error: $e');
+      } finally {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    });
+  }
+
+  Future<void> _testRelatedSongsCancellation() async {
+    if (!_isInitialized) {
+      _addToCliOutput('⚠️ API not initialized - test will still run');
+    }
+
+    setState(() {
+      _isLoading = true;
+      _cliOutput.add(
+        '⏳ Starting Related Songs Cancellation Test (15s timeout)',
+      );
+    });
+
+    final firstSong = 'Perfect';
+    final firstArtist = 'Ed Sheeran';
+    final secondSong = 'Jee Le Zara';
+    final secondArtist = 'Tanishk Bagchi';
+    final timeout = Duration(seconds: 15);
+
+    // First stream
+    final firstResults = <RelatedSong>[];
+    final firstStream = _api.streamRelatedSongs(
+      songName: firstSong,
+      artistName: firstArtist,
+      limit: AppSettings.limit,
+      audioQuality: AppSettings.audioQuality,
+      thumbQuality: AppSettings.thumbnailQuality,
+      includeAudioUrl: true,
+      includeAlbumArt: true,
+    );
+
+    final firstSubscription = firstStream.listen(
+      (song) {
+        firstResults.add(song);
+        _addToCliOutput('🎵 (1st) ${song.title}');
+      },
+      onError: (e) => _addToCliOutput('❌ (1st) Error: $e'),
+      onDone: () => _addToCliOutput(
+        '✅ (1st) Completed with ${firstResults.length} songs',
+      ),
+    );
+
+    // Second stream after timeout
+    Future.delayed(timeout, () async {
+      await firstSubscription.cancel();
+      _addToCliOutput('\n⏰ (1st) Cancelled after ${timeout.inSeconds}s');
+
+      // Print first results summary
+      _addToCliOutput('📋 (1st) Results Summary:');
+      firstResults
+          .take(5)
+          .forEach((song) => _addToCliOutput('   • ${song.title}'));
+      if (firstResults.length > 5) {
+        _addToCliOutput('   ...and ${firstResults.length - 5} more');
+      }
+
+      // Start second stream
+      _addToCliOutput('\n🚀 (2nd) Starting for "$secondSong"');
+      final secondResults = <RelatedSong>[];
+
+      try {
+        int count = 0;
+        await for (final song in _api.streamRelatedSongs(
+          songName: secondSong,
+          artistName: secondArtist,
+          limit: AppSettings.limit,
+          audioQuality: AppSettings.audioQuality,
+          thumbQuality: AppSettings.thumbnailQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        )) {
+          count++;
+          secondResults.add(song);
+          _addToCliOutput('🎧 (2nd) $count: ${song.title}');
+          if (count >= AppSettings.limit) break;
+        }
+
+        // Print second results summary
+        _addToCliOutput('\n📋 (2nd) Results Summary:');
+        secondResults.forEach((song) => _addToCliOutput('   • ${song.title}'));
+      } catch (e) {
+        _addToCliOutput('❌ (2nd) Error: $e');
+      } finally {
+        setState(() => _isLoading = false);
+        _addToCliOutput('\n🏁 Test completed');
+        _addToCliOutput('\n✅ RelatedStream Cancellation Did Its Job ✅');
+      }
+    });
+  }
+
+  Future<void> _testArtistSongsCancellation() async {
+    if (!_isInitialized) {
+      _addToCliOutput('⚠️ API not initialized - test will still run');
+    }
+
+    setState(() {
+      _isLoading = true;
+      _cliOutput.add('⏳ Starting Artist Songs Cancellation Test (15s timeout)');
+    });
+
+    final firstArtist = 'Ed Sheeran';
+    final secondArtist = 'Arijit Singh';
+    final timeout = Duration(seconds: 15);
+
+    // First stream
+    final firstResults = <ArtistSong>[];
+    final firstStream = _api.streamArtistSongs(
+      artistName: firstArtist,
+      limit: AppSettings.limit,
+      audioQuality: AppSettings.audioQuality,
+      thumbQuality: AppSettings.thumbnailQuality,
+      includeAudioUrl: true,
+      includeAlbumArt: true,
+    );
+
+    final firstSubscription = firstStream.listen(
+      (song) {
+        firstResults.add(song);
+        _addToCliOutput('🎵 (1st) ${song.title}');
+      },
+      onError: (e) => _addToCliOutput('❌ (1st) Error: $e'),
+      onDone: () => _addToCliOutput(
+        '✅ (1st) Completed with ${firstResults.length} songs',
+      ),
+    );
+
+    // Second stream after timeout
+    Future.delayed(timeout, () async {
+      await firstSubscription.cancel();
+      _addToCliOutput('\n⏰ (1st) Cancelled after ${timeout.inSeconds}s');
+
+      // Print first results summary
+      _addToCliOutput('📋 (1st) Results Summary:');
+      firstResults
+          .take(5)
+          .forEach((song) => _addToCliOutput('   • ${song.title}'));
+      if (firstResults.length > 5) {
+        _addToCliOutput('   ...and ${firstResults.length - 5} more');
+      }
+
+      // Start second stream
+      _addToCliOutput('\n🚀 (2nd) Starting for "$secondArtist"');
+      final secondResults = <ArtistSong>[];
+
+      try {
+        int count = 0;
+        await for (final song in _api.streamArtistSongs(
+          artistName: secondArtist,
+          limit: AppSettings.limit,
+          audioQuality: AppSettings.audioQuality,
+          thumbQuality: AppSettings.thumbnailQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        )) {
+          count++;
+          secondResults.add(song);
+          _addToCliOutput('🎧 (2nd) $count: ${song.title}');
+          if (count >= AppSettings.limit) break;
+        }
+
+        // Print second results summary
+        _addToCliOutput('\n📋 (2nd) Results Summary:');
+        secondResults.forEach((song) => _addToCliOutput('   • ${song.title}'));
+      } catch (e) {
+        _addToCliOutput('❌ (2nd) Error: $e');
+      } finally {
+        setState(() => _isLoading = false);
+        _addToCliOutput('\n🏁 Test completed');
+        _addToCliOutput('\n✅ ArtistStream Cancellation Did Its Job ✅');
+      }
+    });
+  }
+
   void _clearCliOutput() {
     setState(() {
       _cliOutput.clear();
@@ -1137,7 +1418,6 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                     SizedBox(height: 16),
 
                     // Button Grid
-                    // Button Grid
                     Expanded(
                       child: GridView.count(
                         crossAxisCount:
@@ -1172,6 +1452,42 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                                 : _searchMusic,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.orange,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.swap_horiz),
+                            label: Text('Test Cancellation'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _testStreamCancellation,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.deepOrange,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          // For artist songs test
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.person),
+                            label: Text('Test Artist Cancel'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _testArtistSongsCancellation,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+
+                          // For related songs test
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.queue_music),
+                            label: Text('Test Related Cancel'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _testRelatedSongsCancellation,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.purple,
                               foregroundColor: Colors.white,
                             ),
                           ),

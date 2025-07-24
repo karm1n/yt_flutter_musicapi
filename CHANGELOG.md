@@ -4,7 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-[3.3.1]
+
+[3.3.2]
+
+## Fixed
+
+`NOW_WORKING` 
+- Ensured robust per-search cancellation by tracking and checking the latest active search ID for each stream type.
+
+- Added a final guard in both Kotlin and Python to prevent yielding or emitting results from any previous/cancelled stream.
+
+- Eliminated edge-case race conditions that could allow items from a canceled query to appear in a new search stream.
+
+- Unified cancellation handling across all stream handlers to guarantee only current query results reach the client.[3.3.1]
 
 ## Added
 

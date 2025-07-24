@@ -48,7 +48,8 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
         job = plugin.coroutineScope.launch {
             try {
                 Log.d("YTMusicAPI", "SearchStreamHandler: Starting search execution")
-                
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
                 val query = args["query"] as? String ?: throw IllegalArgumentException("Query is required")
                 searchId = "search_${query.hashCode()}_${System.currentTimeMillis()}"
 
@@ -123,7 +124,19 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                     }
                 }
             } finally {
-                searchId?.let { plugin.searchManager.cancelSearch(it) }
+                // ✅ Cancel old stream if still active
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    } else {
+                        Log.d("YTMusicAPI", "Search $it already cleaned up")
+                    }
+                }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    events?.endOfStream()  // ✔ ensures Flutter doesn't hang
+                }
             }
         }
     }
@@ -268,7 +281,8 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
         job = plugin.coroutineScope.launch {
             try {
                 Log.d("YTMusicAPI", "RelatedSongsStreamHandler: Starting related songs execution")
-                
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
                 val songName = args["songName"] as? String ?: throw IllegalArgumentException("Song name required")
                 val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("Artist name required")
                 searchId = "related_${songName.hashCode()}_${artistName.hashCode()}_${System.currentTimeMillis()}"
@@ -343,7 +357,19 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
                     }
                 }
             } finally {
-                searchId?.let { plugin.searchManager.cancelSearch(it) }
+                // ✅ Cancel old stream if still active
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    } else {
+                        Log.d("YTMusicAPI", "Search $it already cleaned up")
+                    }
+                }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    events?.endOfStream()  // ✔ ensures Flutter doesn't hang
+                }
             }
         }
     }
@@ -473,6 +499,8 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
         job = plugin.coroutineScope.launch {
             try {
                 Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Starting artist songs execution")
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
 
                 val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("artistName required")
                 searchId = "artist_${artistName.hashCode()}_${System.currentTimeMillis()}"
@@ -547,11 +575,15 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                 searchId?.let {
                     if (plugin.searchManager.has(it)) {
                         plugin.searchManager.cancelSearch(it)
-                    } else {
-                        Log.d("YTMusicAPI", "Search $it not found for cancellation (already closed)")
                     }
                 }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    eventSink?.endOfStream()
+                }
             }
+
         }
     }
 
@@ -621,6 +653,8 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                 }
 
                 itemCount++
+                Log.d("YTMusicAPI", "ArtistSongsStreamHandler: Processed $itemCount items")
+
                 yield()
 
             } catch (e: Exception) {
@@ -693,6 +727,8 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
 
                 val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher not initialized")
                 plugin.searchManager.cancelType(SEARCH_TYPE)
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
 
                 val generator = withContext(Dispatchers.IO) {
                     suspendCancellableCoroutine<PyObject> { continuation ->
@@ -753,6 +789,8 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                         }
                         
                         itemCount++
+                        Log.d("YTMusicAPI", "SongDetailsStreamHandler: Processed $itemCount items")
+
                     } catch (e: Exception) {
                         if (e.message?.contains("StopIteration") == true || e.toString().contains("StopIteration")) {
                             break
@@ -783,6 +821,8 @@ class SongDetailsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
             } finally {
                 searchId?.let { plugin.searchManager.cancelSearch(it) }
                 pythonExecutor.shutdown()
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
             }
         }
     }
