@@ -2,6 +2,13 @@
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:yt_flutter_musicapi/models/artistsStreamModel.dart';
+import 'package:yt_flutter_musicapi/models/audioUrlresultsModel.dart';
+import 'package:yt_flutter_musicapi/models/lyricsModel.dart';
+import 'package:yt_flutter_musicapi/models/relatedSongModel.dart';
+import 'package:yt_flutter_musicapi/models/searchModel.dart';
+
+import 'package:yt_flutter_musicapi/models/systemStatusModel.dart';
 
 import 'yt_flutter_musicapi_platform_interface.dart';
 
@@ -332,187 +339,6 @@ class YtFlutterMusicapi {
         .map((item) => ArtistSong.fromMap(item));
   }
 
-  /// Gets detailed information for songs in single or batch mode
-  Future<YTMusicResponse<dynamic>> getSongDetails({
-    required List<Map<String, String>> songs,
-    String mode = "batch", // "single" or "batch"
-    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
-    AudioQuality audioQuality = AudioQuality.veryHigh,
-    bool includeAudioUrl = true,
-    bool includeAlbumArt = true,
-  }) async {
-    return _executeApiCall<dynamic>(
-      () async {
-        try {
-          // Transform the input songs to match Android parameter names
-          final processedSongs = songs.map((song) {
-            return {
-              'song_name': song['title'] ?? '',
-              'artist_name': song['artist'] ?? '',
-            };
-          }).toList();
-
-          final response = await _channel.invokeMethod('getSongDetails', {
-            'songs': processedSongs,
-            'mode': mode.toLowerCase(),
-            'thumbQuality': thumbQuality.value,
-            'audioQuality': audioQuality.value,
-            'includeAudioUrl': includeAudioUrl,
-            'includeAlbumArt': includeAlbumArt,
-          });
-
-          // Convert response to Map if it isn't already
-          final Map<String, dynamic> responseMap = response is Map
-              ? Map<String, dynamic>.from(response)
-              : {'data': response};
-
-          // Check for error response first
-          if (responseMap.containsKey('error')) {
-            throw PlatformException(
-              code: responseMap['errorCode'] ?? 'UNKNOWN_ERROR',
-              message: responseMap['error']?.toString(),
-              details: responseMap,
-            );
-          }
-
-          // Handle based on mode
-          if (mode.toLowerCase() == "single") {
-            // Single mode - expect a single song detail
-            final songData = responseMap['data'] is Map
-                ? Map<String, dynamic>.from(responseMap['data'])
-                : responseMap;
-
-            if (songData.isEmpty) {
-              throw Exception('No song data found');
-            }
-
-            return SongDetail.fromMap(songData);
-          } else {
-            // Batch mode - expect a list of results
-            dynamic data = responseMap['data'];
-            if (data == null) {
-              throw Exception('No data received in batch mode');
-            }
-
-            // Ensure we have a List
-            final List<dynamic> resultsList = data is List ? data : [data];
-
-            final List<SongDetail> songDetails = [];
-            final List<Map<String, dynamic>> errors = [];
-
-            for (final item in resultsList) {
-              try {
-                if (item is Map) {
-                  final itemMap = Map<String, dynamic>.from(item);
-                  if (itemMap.containsKey('error')) {
-                    errors.add({
-                      'error': itemMap['error'],
-                      'success': false,
-                    });
-                  } else {
-                    songDetails.add(SongDetail.fromMap(itemMap));
-                  }
-                }
-              } catch (e, stackTrace) {
-                debugPrint(
-                    'Error processing song detail: $e\n$stackTrace\nItem: $item');
-                errors.add({
-                  'error': e.toString(),
-                  'success': false,
-                });
-              }
-            }
-
-            // Return structured batch response
-            return {
-              'success': true,
-              'data': songDetails,
-              'errors': errors,
-              'count':
-                  responseMap['count'] ?? (songDetails.length + errors.length),
-              'processed': responseMap['processed'] ?? songDetails.length,
-              'error_count': responseMap['errors'] ?? errors.length,
-            };
-          }
-        } catch (e, stackTrace) {
-          debugPrint('Error in getSongDetails: $e\n$stackTrace');
-          rethrow;
-        }
-      },
-    );
-  }
-
-  Stream<YTMusicResponse<dynamic>> streamSongDetails({
-    required List<Map<String, String>> songs,
-    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
-    AudioQuality audioQuality = AudioQuality.veryHigh,
-    bool includeAudioUrl = true,
-    bool includeAlbumArt = true,
-  }) {
-    if (!_isInitialized) {
-      return Stream.error(YTMusicResponse<dynamic>(
-        success: false,
-        error: 'YTMusic API not initialized. Call initialize() first.',
-      ));
-    }
-
-    try {
-      // Transform the input songs to match Android parameter names
-      final processedSongs = songs.map((song) {
-        return {
-          'song_name': song['title'] ?? '',
-          'artist_name': song['artist'] ?? '',
-        };
-      }).toList();
-
-      final stream = YtFlutterMusicapiPlatform.instance.streamSongDetails(
-        songs: processedSongs,
-        thumbQuality: thumbQuality.value,
-        audioQuality: audioQuality.value,
-        includeAudioUrl: includeAudioUrl,
-        includeAlbumArt: includeAlbumArt,
-      );
-
-      return stream.map((event) {
-        try {
-          final eventMap = Map<String, dynamic>.from(event);
-
-          // Handle error items
-          if (eventMap.containsKey('error')) {
-            return YTMusicResponse<dynamic>(
-              success: false,
-              error: eventMap['error']?.toString(),
-              data: null,
-            );
-          }
-
-          // Handle successful song details
-          final songDetail = SongDetail.fromMap(eventMap);
-          return YTMusicResponse<dynamic>(
-            success: true,
-            data: songDetail,
-          );
-        } catch (e) {
-          return YTMusicResponse<dynamic>(
-            success: false,
-            error: 'Error processing stream item: ${e.toString()}',
-            data: null,
-          );
-        }
-      }).handleError((error) {
-        return YTMusicResponse<dynamic>(
-          success: false,
-          error: error.toString(),
-        );
-      });
-    } catch (e) {
-      return Stream.error(YTMusicResponse<dynamic>(
-        success: false,
-        error: e.toString(),
-      ));
-    }
-  }
-
   /// Fetches lyrics for a song from YouTube Music
   ///
   /// [songName] - The name of the song to fetch lyrics for
@@ -578,6 +404,49 @@ class YtFlutterMusicapi {
       } catch (e, stackTrace) {
         debugPrint('Error in fetchLyrics: $e');
         debugPrint('Stack trace: $stackTrace');
+        rethrow;
+      }
+    });
+  }
+
+  Future<YTMusicResponse<AudioUrlResult>> getAudioUrlFlexible({
+    String? title,
+    String? artist,
+    String? videoId,
+    AudioQuality audioQuality = AudioQuality.high,
+  }) async {
+    return _executeApiCall<AudioUrlResult>(() async {
+      try {
+        // Validate input parameters
+        if ((videoId?.isEmpty ?? true) &&
+            (title?.isEmpty ?? true) &&
+            (artist?.isEmpty ?? true)) {
+          throw ArgumentError(
+              'Either videoId OR (title and/or artist) must be provided');
+        }
+
+        final response =
+            await YtFlutterMusicapiPlatform.instance.getAudioUrlFlexible(
+          title: title,
+          artist: artist,
+          videoId: videoId,
+          audioQuality: audioQuality.value,
+        );
+
+        final responseMap = Map<String, dynamic>.from(response);
+
+        // Check for error response
+        if (responseMap.containsKey('error')) {
+          throw PlatformException(
+            code: responseMap['errorCode']?.toString() ?? 'AUDIO_URL_ERROR',
+            message: responseMap['error']?.toString(),
+            details: responseMap,
+          );
+        }
+
+        return AudioUrlResult.fromMap(responseMap);
+      } catch (e, stackTrace) {
+        debugPrint('Error in getAudioUrlFlexible: $e\n$stackTrace');
         rethrow;
       }
     });
@@ -705,311 +574,4 @@ class YtFlutterMusicapi {
   }
 
   bool get isInitialized => _isInitialized;
-}
-
-// 1. SystemStatus model class
-class SystemStatus {
-  final bool success;
-  final String message;
-  final bool ytmusicReady;
-  final String ytmusicVersion;
-  final bool ytdlpReady;
-  final String ytdlpVersion;
-
-  SystemStatus({
-    required this.success,
-    required this.message,
-    required this.ytmusicReady,
-    required this.ytmusicVersion,
-    required this.ytdlpReady,
-    required this.ytdlpVersion,
-  });
-
-  factory SystemStatus.fromMap(Map<String, dynamic> map) {
-    return SystemStatus(
-      success: map['success'] ?? false,
-      message: map['message'] ?? 'Unknown',
-      ytmusicReady: map['ytmusic_ready'] ?? false,
-      ytmusicVersion: map['ytmusic_version'] ?? 'Unknown',
-      ytdlpReady: map['ytdlp_ready'] ?? false,
-      ytdlpVersion: map['ytdlp_version'] ?? 'Unknown',
-    );
-  }
-
-  bool get isFullyOperational => ytmusicReady && ytdlpReady;
-
-  String get statusSummary {
-    if (isFullyOperational) {
-      return 'All systems operational';
-    } else if (ytmusicReady || ytdlpReady) {
-      return 'Partial functionality available';
-    } else {
-      return 'System offline';
-    }
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'success': success,
-      'message': message,
-      'ytmusic_ready': ytmusicReady,
-      'ytmusic_version': ytmusicVersion,
-      'ytdlp_ready': ytdlpReady,
-      'ytdlp_version': ytdlpVersion,
-    };
-  }
-}
-
-/// Data class for Song Details
-class SongDetail {
-  final String title;
-  final String artists;
-  final String videoId;
-  final String? duration;
-  final String? albumArt;
-  final String? audioUrl;
-  final String? year;
-  final String? album;
-  final bool? isOriginal;
-  final double? progress; // For streaming progress indication
-  final String? status; // Processing status
-
-  SongDetail({
-    required this.title,
-    required this.artists,
-    required this.videoId,
-    this.duration,
-    this.albumArt,
-    this.audioUrl,
-    this.year,
-    this.album,
-    this.isOriginal,
-    this.progress,
-    this.status,
-  });
-
-  factory SongDetail.fromMap(Map<String, dynamic> map) {
-    return SongDetail(
-      title: map['title']?.toString() ?? 'Unknown',
-      artists: map['artists']?.toString() ?? 'Unknown',
-      videoId: map['videoId']?.toString() ?? '',
-      duration: map['duration']?.toString(),
-      albumArt: map['albumArt']?.toString(),
-      audioUrl: map['audioUrl']?.toString(),
-      year: map['year']?.toString(),
-      album: map['album']?.toString(),
-      isOriginal: map['isOriginal'] is bool
-          ? map['isOriginal'] as bool
-          : (map['isOriginal']?.toString().toLowerCase() == 'true'),
-      progress: map['progress']?.toDouble(),
-      status: map['status']?.toString(),
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'title': title,
-      'artists': artists,
-      'videoId': videoId,
-      'duration': duration,
-      'albumArt': albumArt,
-      'audioUrl': audioUrl,
-      'year': year,
-      'album': album,
-      'isOriginal': isOriginal,
-      'progress': progress,
-      'status': status,
-    };
-  }
-
-  @override
-  String toString() {
-    return 'SongDetail(title: $title, artists: $artists, videoId: $videoId, '
-        'duration: $duration, albumArt: $albumArt, audioUrl: $audioUrl, '
-        'year: $year, album: $album, isOriginal: $isOriginal, '
-        'progress: $progress, status: $status)';
-  }
-}
-
-/// Data class for Artist Songs
-class ArtistSong {
-  final String title;
-  final String artists;
-  final String videoId;
-  final String? duration;
-  final String? albumArt;
-  final String? audioUrl;
-  final String artistName;
-
-  ArtistSong({
-    required this.title,
-    required this.artists,
-    required this.videoId,
-    this.duration,
-    this.albumArt,
-    this.audioUrl,
-    required this.artistName,
-  });
-
-  // Update ArtistSong model
-  factory ArtistSong.fromMap(Map<String, dynamic> map) {
-    return ArtistSong(
-      title: map['title']?.toString() ?? 'Unknown',
-      artists: map['artists']?.toString() ?? 'Unknown',
-      videoId: map['videoId']?.toString() ?? '',
-      duration: map['duration']?.toString(),
-      albumArt: map['albumArt']?.toString(),
-      audioUrl: map['audioUrl']?.toString(),
-      artistName: map['artistName']?.toString() ??
-          map['artists']?.toString() ??
-          'Unknown',
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'title': title,
-      'artists': artists,
-      'videoId': videoId,
-      'duration': duration,
-      'albumArt': albumArt,
-      'audioUrl': audioUrl,
-      'artistName': artistName,
-    };
-  }
-
-  @override
-  String toString() {
-    return 'ArtistSong(title: $title, artists: $artists, videoId: $videoId, duration: $duration, albumArt: $albumArt, audioUrl: $audioUrl, artistName: $artistName)';
-  }
-}
-
-/// Data class for Search Results
-class SearchResult {
-  final String title;
-  final String artists;
-  final String videoId;
-  final String? duration;
-  final String? year;
-  final String? albumArt;
-  final String? audioUrl;
-
-  SearchResult({
-    required this.title,
-    required this.artists,
-    required this.videoId,
-    this.duration,
-    this.year,
-    this.albumArt,
-    this.audioUrl,
-  });
-
-  factory SearchResult.fromMap(Map<String, dynamic> map) {
-    return SearchResult(
-      title: map['title'] as String? ?? 'Unknown',
-      artists: map['artists'] as String? ?? 'Unknown',
-      videoId: map['videoId'] as String? ?? '',
-      duration: map['duration'] as String?,
-      year: map['year'] as String?,
-      albumArt: map['albumArt'] as String?,
-      audioUrl: map['audioUrl'] as String?,
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'title': title,
-      'artists': artists,
-      'videoId': videoId,
-      'duration': duration,
-      'year': year,
-      'albumArt': albumArt,
-      'audioUrl': audioUrl,
-    };
-  }
-
-  @override
-  String toString() {
-    return 'SearchResult(title: $title, artists: $artists, videoId: $videoId, duration: $duration, year: $year, albumArt: $albumArt, audioUrl: $audioUrl)';
-  }
-}
-
-/// Data class for Related Songs
-class RelatedSong {
-  final String title;
-  final String artists;
-  final String videoId;
-  final String? duration;
-  final String? albumArt;
-  final String? audioUrl;
-  final bool isOriginal;
-
-  RelatedSong({
-    required this.title,
-    required this.artists,
-    required this.videoId,
-    this.duration,
-    this.albumArt,
-    this.audioUrl,
-    this.isOriginal = false,
-  });
-
-  factory RelatedSong.fromMap(Map<String, dynamic> map) {
-    return RelatedSong(
-      title: map['title']?.toString() ?? 'Unknown',
-      artists: map['artists']?.toString() ?? 'Unknown',
-      videoId: map['videoId']?.toString() ?? '',
-      duration: map['duration']?.toString(),
-      albumArt: map['albumArt']?.toString(),
-      audioUrl: map['audioUrl']?.toString(),
-      isOriginal: map['isOriginal'] is bool
-          ? map['isOriginal'] as bool
-          : (map['isOriginal']?.toString().toLowerCase() == 'true'),
-    );
-  }
-}
-
-/// Data class for Lyrics
-class Lyrics {
-  final String text;
-  final String source;
-  final String? language;
-
-  final String songName;
-  final String artistName;
-
-  Lyrics({
-    required this.text,
-    required this.source,
-    this.language,
-    required this.songName,
-    required this.artistName,
-  });
-
-  factory Lyrics.fromMap(Map<String, dynamic> map) {
-    return Lyrics(
-      text: map['lyrics']?.toString() ?? '',
-      source: map['source']?.toString() ?? 'YTMusic',
-      language: map['language']?.toString(),
-      songName: map['songName']?.toString() ?? 'Unknown',
-      artistName: map['artistName']?.toString() ?? 'Unknown',
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'lyrics': text,
-      'source': source,
-      'language': language,
-      'songName': songName,
-      'artistName': artistName,
-    };
-  }
-
-  @override
-  String toString() {
-    return 'Lyrics(text: ${text.length > 20 ? '${text.substring(0, 20)}...' : text}, '
-        'source: $source, language: $language'
-        'songName: $songName, artistName: $artistName)';
-  }
 }

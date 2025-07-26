@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:yt_flutter_musicapi/models/relatedSongModel.dart';
+import 'package:yt_flutter_musicapi/models/artistsStreamModel.dart';
+import 'package:yt_flutter_musicapi/models/searchModel.dart';
 import 'package:yt_flutter_musicapi/yt_flutter_musicapi.dart';
 
 void main() {
   runApp(MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -14,13 +22,42 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
         brightness: Brightness.light,
+        scaffoldBackgroundColor: Colors.white,
+        appBarTheme: AppBarTheme(
+          backgroundColor: Colors.blue,
+          foregroundColor: Colors.white,
+        ),
       ),
       darkTheme: ThemeData(
         brightness: Brightness.dark,
         primarySwatch: Colors.blue,
+        scaffoldBackgroundColor: Color(0xFF121212),
+        appBarTheme: AppBarTheme(
+          backgroundColor: Color(0xFF1E1E1E),
+          foregroundColor: Colors.white,
+        ),
+        cardTheme: CardThemeData(color: Color(0xFF1E1E1E)),
+        textTheme: TextTheme(
+          bodyLarge: TextStyle(color: Colors.white),
+          bodyMedium: TextStyle(color: Colors.white70),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+          ),
+        ),
       ),
+      themeMode: AppSettings.isDarkMode ? ThemeMode.dark : ThemeMode.light,
       home: MusicApiTestPage(),
     );
+  }
+
+  // Call this method from your settings dialog callback
+  void updateTheme() {
+    setState(() {
+      // This will trigger a rebuild with the new theme
+    });
   }
 }
 
@@ -28,14 +65,33 @@ class AppSettings {
   static int limit = 5;
   static AudioQuality audioQuality = AudioQuality.veryHigh;
   static ThumbnailQuality thumbnailQuality = ThumbnailQuality.veryHigh;
-  static bool isDarkMode = false;
+  static bool isDarkMode = true;
+  static int batchSize = 4;
   static String mode = 'auto'; // 'auto', 'batch', or 'stream'
   static String artistName = 'Ed Sheeran';
+  static String testVideoId = '4NRXx6U8ABQ'; // Default video ID
   static List<Map<String, String>> testSongs = [
     {'title': 'Perfect', 'artist': 'Ed Sheeran'},
     {'title': 'Bad Guy', 'artist': 'Billie Eilish'},
     {'title': 'Blinding Lights', 'artist': 'The Weeknd'},
   ];
+
+  static List<Map<String, String>> batchTestSongs = [
+    {'title': 'Bohemian Rhapsody', 'artist': 'Queen'},
+    {'title': 'Sweet Child O\' Mine', 'artist': 'Guns N\' Roses'},
+    {'title': 'Hotel California', 'artist': 'Eagles'},
+    {'title': 'Enter Sandman', 'artist': 'Metallica'},
+    {'title': 'Livin\' on a Prayer', 'artist': 'Bon Jovi'},
+    {'title': 'Seven Nation Army', 'artist': 'The White Stripes'},
+    {'title': 'In the End', 'artist': 'Linkin Park'},
+    {'title': 'Mr. Brightside', 'artist': 'The Killers'},
+    {'title': 'Radioactive', 'artist': 'Imagine Dragons'},
+    {'title': 'Use Somebody', 'artist': 'Kings of Leon'},
+    {'title': 'Take Me Out', 'artist': 'Franz Ferdinand'},
+    {'title': 'The Pretender', 'artist': 'Foo Fighters'},
+    {'title': 'Starlight', 'artist': 'Muse'},
+  ];
+
   static String relatedSongTitle = 'Perfect';
   static String relatedSongArtist = 'Ed Sheeran';
 }
@@ -69,8 +125,6 @@ class Inspector {
         _checkRelatedSong(item);
       } else if (item is ArtistSong) {
         _checkArtistSong(item);
-      } else if (item is SongDetail) {
-        _checkSongDetail(item);
       }
     }
   }
@@ -81,32 +135,6 @@ class Inspector {
     print('  Video ID: ${song.videoId}');
     print('  Duration: ${song.duration ?? 'N/A'}');
     print('  Artist Name: ${song.artistName}');
-
-    if (song.albumArt != null) {
-      print(
-        '  ✅ Album Art: Available (${AppSettings.thumbnailQuality.value} quality)',
-      );
-    } else {
-      print('  ❌ Album Art: Missing');
-    }
-
-    if (song.audioUrl != null) {
-      print(
-        '  ✅ Audio URL: Available (${AppSettings.audioQuality.value} quality)',
-      );
-    } else {
-      print('  ❌ Audio URL: Missing');
-    }
-    print('  ---');
-  }
-
-  static void _checkSongDetail(SongDetail song) {
-    print('  Title: ${song.title}');
-    print('  Artists: ${song.artists}');
-    print('  Video ID: ${song.videoId}');
-    print('  Duration: ${song.duration ?? 'N/A'}');
-    print('  Year: ${song.year ?? 'N/A'}');
-    print('  Album: ${song.album ?? 'N/A'}');
 
     if (song.albumArt != null) {
       print(
@@ -174,18 +202,6 @@ class Inspector {
       print('  ❌ Audio URL: Missing');
     }
     print('  ---');
-  }
-
-  static void checkSingleSongDetail(SongDetail? songDetail, String operation) {
-    print('🔍 INSPECTOR: Checking single song detail for $operation');
-
-    if (songDetail == null) {
-      print('❌ INSPECTOR: No song detail returned');
-      return;
-    }
-
-    print('📋 INSPECTOR: Song Detail:');
-    _checkSongDetail(songDetail);
   }
 }
 
@@ -982,197 +998,174 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
     }
   }
 
-  Future<void> _getSongDetails() async {
-    if (_isLoading || !_isInitialized) {
-      _addToCliOutput('❌ API not initialized or busy');
-      return;
-    }
-
+  Future<void> _testGetAudioUrlFlexible() async {
     setState(() {
       _isLoading = true;
     });
-
-    _addToCliOutput('🎵 Getting song details');
-    _addToCliOutput(
-      '📊 Settings: Mode=${AppSettings.mode}, Audio=${AppSettings.audioQuality.value}, Thumb=${AppSettings.thumbnailQuality.value}',
-    );
+    _addToCliOutput('🎵 Testing getAudioUrlFlexible...');
 
     try {
-      if (AppSettings.mode == 'single') {
-        // Handle single song detail using related song inputs
-        _addToCliOutput('🔍 Getting details for single song:');
+      // Test 1: With title and artist
+      _addToCliOutput('\n🔍 Test 1: Title + Artist lookup');
+      _addToCliOutput('   Title: "Blinding Lights"');
+      _addToCliOutput('   Artist: "The Weeknd"');
+      _addToCliOutput('   Quality: ${AppSettings.audioQuality.value}');
+
+      final response1 = await _api.getAudioUrlFlexible(
+        title: 'Blinding Lights',
+        artist: 'The Weeknd',
+        audioQuality: AppSettings.audioQuality,
+      );
+
+      if (response1.success && response1.data != null) {
+        _addToCliOutput('✅ Success!');
+        _addToCliOutput('   Found video ID: ${response1.data!.videoId}');
+        _addToCliOutput('   Detected quality: ${response1.data!.audioQuality}');
         _addToCliOutput(
-          '   "${AppSettings.relatedSongTitle}" by ${AppSettings.relatedSongArtist}',
+          '   URL (truncated): ${response1.data!.audioUrl?.substring(0, 50)}...',
         );
-
-        final response = await _api.getSongDetails(
-          songs: [
-            {
-              'title': AppSettings.relatedSongTitle,
-              'artist': AppSettings.relatedSongArtist,
-            },
-          ],
-          mode: 'single',
-          audioQuality: AppSettings.audioQuality,
-          thumbQuality: AppSettings.thumbnailQuality,
-          includeAudioUrl: true,
-          includeAlbumArt: true,
-        );
-
-        if (response.success && response.data != null) {
-          final songDetail = response.data as SongDetail;
-          _addToCliOutput('✅ Song details retrieved successfully');
-          _addToCliOutput('🎵 Song Detail:');
-          _addToCliOutput('   Title: ${songDetail.title}');
-          _addToCliOutput('   Artists: ${songDetail.artists}');
-          _addToCliOutput('   Duration: ${songDetail.duration ?? 'N/A'}');
-          _addToCliOutput('   Video ID: ${songDetail.videoId}');
-          _addToCliOutput('   Year: ${songDetail.year ?? 'N/A'}');
-          _addToCliOutput('   Album: ${songDetail.album ?? 'N/A'}');
-          _addToCliOutput(
-            '   Album Art: ${songDetail.albumArt != null ? 'Available' : 'N/A'}',
-          );
-          _addToCliOutput(
-            '   Audio URL: ${songDetail.audioUrl != null ? 'Available' : 'N/A'}',
-          );
-
-          Inspector.checkSingleSongDetail(songDetail, 'Song Details (Single)');
-        } else {
-          _addToCliOutput('❌ Failed to get song details');
-          _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
-        }
-      } else if (AppSettings.mode == 'stream') {
-        // Handle stream mode with test songs
-        _addToCliOutput(
-          '📋 Streaming details for ${AppSettings.testSongs.length} songs',
-        );
-        for (int i = 0; i < AppSettings.testSongs.length; i++) {
-          final song = AppSettings.testSongs[i];
-          _addToCliOutput(
-            '   ${i + 1}. "${song['title']}" by ${song['artist']}',
-          );
-        }
-
-        int received = 0;
-        final stopwatch = Stopwatch()..start();
-
-        await for (final response in _api.streamSongDetails(
-          songs: AppSettings.testSongs,
-          thumbQuality: AppSettings.thumbnailQuality,
-          audioQuality: AppSettings.audioQuality,
-          includeAudioUrl: true,
-          includeAlbumArt: true,
-        )) {
-          received++;
-          if (response.success && response.data != null) {
-            final songDetail = response.data as SongDetail;
-            _addToCliOutput(
-              '🎵 Received song $received in ${stopwatch.elapsedMilliseconds}ms:',
-            );
-            _addToCliOutput('   Title: ${songDetail.title}');
-            _addToCliOutput('   Artists: ${songDetail.artists}');
-            _addToCliOutput('   Duration: ${songDetail.duration ?? 'N/A'}');
-            _addToCliOutput('   Video ID: ${songDetail.videoId}');
-            _addToCliOutput('   Year: ${songDetail.year ?? 'N/A'}');
-            _addToCliOutput('   Album: ${songDetail.album ?? 'N/A'}');
-            _addToCliOutput(
-              '   Album Art: ${songDetail.albumArt != null ? 'Available' : 'N/A'}',
-            );
-            _addToCliOutput(
-              '   Audio URL: ${songDetail.audioUrl != null ? 'Available' : 'N/A'}',
-            );
-            _addToCliOutput('   ---');
-          } else {
-            _addToCliOutput('❌ Error for song $received');
-            _addToCliOutput('   Error: ${response.error ?? 'Unknown error'}');
-          }
-          stopwatch.reset();
-        }
-
-        _addToCliOutput('✅ Streamed details for $received songs successfully');
       } else {
-        // Handle batch mode with test songs
-        _addToCliOutput(
-          '📋 Processing batch of ${AppSettings.testSongs.length} songs',
-        );
-        for (int i = 0; i < AppSettings.testSongs.length; i++) {
-          final song = AppSettings.testSongs[i];
-          _addToCliOutput(
-            '   ${i + 1}. "${song['title']}" by ${song['artist']}',
-          );
-        }
+        _addToCliOutput('❌ Failed: ${response1.error ?? 'Unknown error'}');
+      }
 
-        final response = await _api.getSongDetails(
-          songs: AppSettings.testSongs,
-          mode: 'batch',
+      // Test 2: With video ID from settings
+      _addToCliOutput('\n🔍 Test 2: Direct video ID lookup');
+      _addToCliOutput('   Video ID: ${AppSettings.testVideoId}');
+      _addToCliOutput('   Quality: ${AppSettings.audioQuality.value}');
+
+      if (AppSettings.testVideoId.isEmpty) {
+        _addToCliOutput('⚠️ No video ID configured in settings');
+      } else {
+        final response2 = await _api.getAudioUrlFlexible(
+          videoId: AppSettings.testVideoId,
           audioQuality: AppSettings.audioQuality,
-          thumbQuality: AppSettings.thumbnailQuality,
-          includeAudioUrl: true,
-          includeAlbumArt: true,
         );
 
-        if (response.success) {
-          if (response.data is Map) {
-            final data = response.data as Map<String, dynamic>;
-            final List<SongDetail> songDetails =
-                (data['data'] as List?)?.cast<SongDetail>() ?? [];
-            final errors = (data['errors'] as List?) ?? [];
-            final processed = data['processed'] as int? ?? 0;
-            final errorCount = data['error_count'] as int? ?? 0;
-
-            _addToCliOutput('✅ Batch processing completed');
-            _addToCliOutput('📋 Success: $processed, Errors: $errorCount');
-
-            if (songDetails.isNotEmpty) {
-              _addToCliOutput('🎵 Successfully processed songs:');
-              for (int i = 0; i < songDetails.length; i++) {
-                final song = songDetails[i];
-                _addToCliOutput('   ${i + 1}. ${song.title} - ${song.artists}');
-                _addToCliOutput('      Video ID: ${song.videoId}');
-                _addToCliOutput('      Duration: ${song.duration ?? 'N/A'}');
-              }
-            }
-
-            if (errors.isNotEmpty) {
-              _addToCliOutput('❌ Errors encountered:');
-              for (int i = 0; i < errors.length; i++) {
-                final error = errors[i];
-                _addToCliOutput('   ${i + 1}. ${error['error']}');
-              }
-            }
-
-            Inspector.checkRules(songDetails, 'Song Details (Batch)');
-          } else if (response.data is List) {
-            final songDetails = response.data as List<SongDetail>;
-            _addToCliOutput('✅ Batch processing completed');
-            _addToCliOutput('📋 Success: ${songDetails.length}');
-
-            for (int i = 0; i < songDetails.length; i++) {
-              final song = songDetails[i];
-              _addToCliOutput('   ${i + 1}. ${song.title} - ${song.artists}');
-              _addToCliOutput('      Video ID: ${song.videoId}');
-              _addToCliOutput('      Duration: ${song.duration ?? 'N/A'}');
-            }
-
-            Inspector.checkRules(songDetails, 'Song Details (Batch)');
-          } else {
-            _addToCliOutput('❌ Invalid response format for batch mode');
-          }
+        if (response2.success && response2.data != null) {
+          _addToCliOutput('✅ Success!');
+          _addToCliOutput(
+            '   Detected quality: ${response2.data!.audioQuality}',
+          );
+          _addToCliOutput(
+            '   URL (truncated): ${response2.data!.audioUrl?.substring(0, 50)}...',
+          );
         } else {
-          _addToCliOutput('❌ Failed to get song details');
-          _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
+          _addToCliOutput('❌ Failed: ${response2.error ?? 'Unknown error'}');
         }
       }
 
-      _addToCliOutput('🎉 SUCCESS: Song details operation completed');
+      // Test 3: Error case (no parameters)
+      // _addToCliOutput('\n🔍 Test 3: Verifying input validation');
+      // _addToCliOutput('   Purpose: Confirm API rejects empty requests');
+      // try {
+      //   await _api.getAudioUrlFlexible();
+      //   _addToCliOutput('❌ TEST FAILED - API requires parameters');
+      // } catch (e) {
+      //   _addToCliOutput('✅ PASSED - Correctly rejected empty request');
+      //   _addToCliOutput('   Expected error: $e');
+      // }
+
+      _addToCliOutput('\n🎉 All getAudioUrlFlexible tests completed');
     } catch (e) {
-      _addToCliOutput('❌ Exception during song details fetch: $e');
+      _addToCliOutput('❌ Unexpected error during tests: $e');
     } finally {
       setState(() {
         _isLoading = false;
       });
     }
   }
+
+  // Future<void> _testBatchSongs() async {
+  //   if (_isLoading || !_isInitialized) {
+  //     _addToCliOutput('❌ API not initialized or busy');
+  //     return;
+  //   }
+
+  //   if (AppSettings.mode != 'stream') {
+  //     _addToCliOutput('❌ This test only works in stream mode');
+  //     return;
+  //   }
+
+  //   setState(() {
+  //     _isLoading = true;
+  //   });
+
+  //   // Create a list of 13 test songs
+  //   final testSongs = [
+  //     {'title': 'Bohemian Rhapsody', 'artist': 'Queen'},
+  //     {'title': 'Sweet Child O\' Mine', 'artist': 'Guns N\' Roses'},
+  //     {'title': 'Hotel California', 'artist': 'Eagles'},
+  //     // {'title': 'Enter Sandman', 'artist': 'Metallica'},
+  //     // {'title': 'Livin\' on a Prayer', 'artist': 'Bon Jovi'},
+  //     // {'title': 'Seven Nation Army', 'artist': 'The White Stripes'},
+  //     // {'title': 'In the End', 'artist': 'Linkin Park'},
+  //     // {'title': 'Mr. Brightside', 'artist': 'The Killers'},
+  //     // {'title': 'Radioactive', 'artist': 'Imagine Dragons'},
+  //     // {'title': 'Use Somebody', 'artist': 'Kings of Leon'},
+  //     // {'title': 'Take Me Out', 'artist': 'Franz Ferdinand'},
+  //     // {'title': 'The Pretender', 'artist': 'Foo Fighters'},
+  //     // {'title': 'Starlight', 'artist': 'Muse'},
+  //   ];
+
+  //   _addToCliOutput(
+  //     '🚀 Starting batch processing of ${testSongs.length} songs',
+  //   );
+  //   _addToCliOutput('📋 Batch Settings:');
+  //   _addToCliOutput('   • Audio Quality: ${AppSettings.audioQuality.value}');
+  //   _addToCliOutput(
+  //     '   • Thumb Quality: ${AppSettings.thumbnailQuality.value}',
+  //   );
+  //   _addToCliOutput('   • Batch Size: 4 (default)\n');
+
+  //   // Create a map to track each song's status
+  //   final songStatus = <String, Map<String, dynamic>>{};
+  //   for (final song in testSongs) {
+  //     final key = '${song['title']} - ${song['artist']}';
+  //     songStatus[key] = {'albumArt': '❌ Not Found', 'audioUrl': '❌ Not Found'};
+  //   }
+
+  //   try {
+  //     final stopwatch = Stopwatch()..start();
+
+  //     await for (final response in _api.streamBatchSongs(
+  //       songs: testSongs,
+  //       thumbQuality: AppSettings.thumbnailQuality,
+  //       audioQuality: AppSettings.audioQuality,
+  //     )) {
+  //       if (response.success && response.data != null) {
+  //         final data = response.data as Map<String, dynamic>;
+  //         final songName = data['songName'] ?? data['title'];
+  //         final artistName = data['artistName'] ?? data['artists'];
+  //         final key = '$songName - $artistName';
+
+  //         if (data['type'] == 'album_art') {
+  //           songStatus[key]?['albumArt'] =
+  //               '✅ Available (${AppSettings.thumbnailQuality.value})';
+  //         } else if (data['type'] == 'song_complete') {
+  //           songStatus[key]?['audioUrl'] =
+  //               '✅ Available (${AppSettings.audioQuality.value})';
+  //         }
+  //       }
+  //     }
+
+  //     // Print all songs with their status
+  //     _addToCliOutput('\n🎵 Song Processing Results:');
+  //     songStatus.forEach((song, status) {
+  //       _addToCliOutput('➤ $song');
+  //       _addToCliOutput('   • Album Art: ${status['albumArt']}');
+  //       _addToCliOutput('   • Audio URL: ${status['audioUrl']}');
+  //     });
+
+  //     _addToCliOutput('\n✅ Batch Processing Completed');
+  //     _addToCliOutput('⏱️ Time Taken: ${stopwatch.elapsedMilliseconds}ms');
+  //   } catch (e) {
+  //     _addToCliOutput('❌ Batch processing error: $e');
+  //   } finally {
+  //     setState(() {
+  //       _isLoading = false;
+  //     });
+  //   }
+  // }
 
   Future<void> _fetchLyrics() async {
     if (_isLoading || !_isInitialized) {
@@ -1184,25 +1177,27 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
       _isLoading = true;
     });
 
-    // Use the search query if available, otherwise default to "Billie Eilish bad guy"
-    String query = _searchController.text.trim();
-    if (query.isEmpty) {
-      query = 'Billie Eilish bad guy';
-      _searchController.text = query;
-    }
+    // Use settings from dialog instead of hardcoded values
+    String songName = AppSettings.relatedSongTitle.trim();
+    String artistName = AppSettings.relatedSongArtist.trim();
 
-    // Extract artist and song name (simple parsing for demo)
-    String artistName = 'Billie Eilish';
-    String songName = 'bad guy';
-
-    try {
-      // Try to parse artist and song from query
-      final parts = query.split(' ');
-      if (parts.length > 1) {
-        artistName = parts[0];
-        songName = parts.sublist(1).join(' ');
+    // Fallback to search controller if settings are empty
+    if (songName.isEmpty || artistName.isEmpty) {
+      String query = _searchController.text.trim();
+      if (query.isEmpty) {
+        query = 'Billie Eilish bad guy';
+        _searchController.text = query;
       }
 
+      // Try to parse artist and song from query if settings are empty
+      final parts = query.split(' ');
+      if (parts.length > 1) {
+        if (artistName.isEmpty) artistName = parts[0];
+        if (songName.isEmpty) songName = parts.sublist(1).join(' ');
+      }
+    }
+
+    try {
       _addToCliOutput('🎵 Fetching lyrics for: "$songName" by $artistName');
 
       final response = await _api.fetchLyrics(
@@ -1455,6 +1450,18 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                               foregroundColor: Colors.white,
                             ),
                           ),
+                          // In your button grid (where the other test buttons are)
+                          // ElevatedButton.icon(
+                          //   icon: Icon(Icons.batch_prediction),
+                          //   label: Text('Test Batch'),
+                          //   onPressed: (_isLoading || !_isInitialized)
+                          //       ? null
+                          //       : _testBatchSongs,
+                          //   style: ElevatedButton.styleFrom(
+                          //     backgroundColor: Colors.deepPurple,
+                          //     foregroundColor: Colors.white,
+                          //   ),
+                          // ),
                           ElevatedButton.icon(
                             icon: Icon(Icons.swap_horiz),
                             label: Text('Test Cancellation'),
@@ -1513,17 +1520,19 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                               foregroundColor: Colors.white,
                             ),
                           ),
+                          // In your button grid (where the other test buttons are)
                           ElevatedButton.icon(
-                            icon: Icon(Icons.info_outline),
-                            label: Text('Song Details'),
+                            icon: Icon(Icons.audiotrack),
+                            label: Text('Get AudioUrl Flexible'),
                             onPressed: (_isLoading || !_isInitialized)
                                 ? null
-                                : _getSongDetails,
+                                : _testGetAudioUrlFlexible,
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.indigo,
+                              backgroundColor: Colors.brown,
                               foregroundColor: Colors.white,
                             ),
                           ),
+
                           ElevatedButton.icon(
                             icon: Icon(Icons.music_note),
                             label: Text('Fetch Lyrics'),
@@ -1569,11 +1578,11 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
 
 class SettingsDialog extends StatefulWidget {
   final VoidCallback onSettingsChanged;
-  final VoidCallback onClearCli; // Add this line
+  final VoidCallback onClearCli;
 
   const SettingsDialog({
     required this.onSettingsChanged,
-    required this.onClearCli, // Add this line
+    required this.onClearCli,
     Key? key,
   }) : super(key: key);
 
@@ -1583,224 +1592,286 @@ class SettingsDialog extends StatefulWidget {
 
 class _SettingsDialogState extends State<SettingsDialog> {
   late int _limit;
+  late int _batchSize;
   late AudioQuality _audioQuality;
   late ThumbnailQuality _thumbnailQuality;
   late bool _isDarkMode;
   late String _mode;
   late TextEditingController _artistController;
+  late TextEditingController _videoIdController;
+  late TextEditingController _songTitleController;
+  late TextEditingController _songArtistController;
 
   @override
   void initState() {
     super.initState();
     _limit = AppSettings.limit;
+    _batchSize = AppSettings.batchSize;
     _audioQuality = AppSettings.audioQuality;
     _thumbnailQuality = AppSettings.thumbnailQuality;
     _isDarkMode = AppSettings.isDarkMode;
     _mode = AppSettings.mode;
     _artistController = TextEditingController(text: AppSettings.artistName);
+    _videoIdController = TextEditingController(text: AppSettings.testVideoId);
+    _songTitleController = TextEditingController(
+      text: AppSettings.relatedSongTitle,
+    );
+    _songArtistController = TextEditingController(
+      text: AppSettings.relatedSongArtist,
+    );
   }
 
   @override
   void dispose() {
     _artistController.dispose();
+    _videoIdController.dispose();
+    _songTitleController.dispose();
+    _songArtistController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Settings'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Limit Setting
-            ListTile(
-              title: Text('Limit: $_limit'),
-              subtitle: Slider(
-                value: _limit.toDouble(),
-                min: 1,
-                max: 15,
-                divisions: 14,
+    return Theme(
+      data: ThemeData.dark(), // Force dark theme for dialog
+      child: AlertDialog(
+        backgroundColor: Color(0xFF1E1E1E), // Dark background
+        title: Text('Settings', style: TextStyle(color: Colors.white)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Limit Setting
+              ListTile(
+                title: Text('Limit: $_limit'),
+                subtitle: Slider(
+                  value: _limit.toDouble(),
+                  min: 1,
+                  max: 15,
+                  divisions: 14,
+                  onChanged: (value) {
+                    setState(() {
+                      _limit = value.toInt();
+                    });
+                  },
+                ),
+              ),
+
+              // Batch Size Setting
+              ListTile(
+                title: Text('Batch Size: $_batchSize'),
+                subtitle: Slider(
+                  value: _batchSize.toDouble(),
+                  min: 1,
+                  max: 10,
+                  divisions: 9,
+                  onChanged: (value) {
+                    setState(() {
+                      _batchSize = value.toInt();
+                    });
+                  },
+                ),
+              ),
+
+              // Test Video ID
+              TextField(
+                controller: _videoIdController,
+                decoration: InputDecoration(
+                  labelText: 'Test Video ID',
+                  hintText: 'e.g., 4NRXx6U8ABQ',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              SizedBox(height: 8),
+
+              // Lyrics Song Title
+              TextField(
+                controller: _songTitleController,
+                decoration: InputDecoration(
+                  labelText: 'Lyrics Song Title',
+                  hintText: 'e.g., bad guy',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              SizedBox(height: 8),
+
+              // Lyrics Artist Name
+              TextField(
+                controller: _songArtistController,
+                decoration: InputDecoration(
+                  labelText: 'Lyrics Artist Name',
+                  hintText: 'e.g., Billie Eilish',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              SizedBox(height: 8),
+
+              // Related Song Title
+              TextField(
+                controller: TextEditingController(
+                  text: AppSettings.relatedSongTitle,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Related Song Title',
+                  hintText: 'e.g., Ocean Eyes',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (value) => AppSettings.relatedSongTitle = value,
+              ),
+              SizedBox(height: 8),
+
+              // Related Song Artist
+              TextField(
+                controller: TextEditingController(
+                  text: AppSettings.relatedSongArtist,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Related Song Artist',
+                  hintText: 'e.g., Billie Eilish',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (value) => AppSettings.relatedSongArtist = value,
+              ),
+              SizedBox(height: 8),
+
+              // Mode Selection
+              ListTile(
+                title: Text('Operation Mode'),
+                subtitle: DropdownButton<String>(
+                  value: _mode,
+                  isExpanded: true,
+                  items: ['auto', 'batch', 'stream'].map((mode) {
+                    return DropdownMenuItem(
+                      value: mode,
+                      child: Text(mode.toUpperCase()),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _mode = value;
+                      });
+                    }
+                  },
+                ),
+              ),
+
+              // Artist Name for Testing
+              TextField(
+                controller: _artistController,
+                decoration: InputDecoration(
+                  labelText: 'Artist Name for Testing',
+                  hintText: 'e.g., Billie Eilish',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              SizedBox(height: 8),
+
+              // Audio Quality Setting
+              ListTile(
+                title: Text('Audio Quality'),
+                subtitle: DropdownButton<AudioQuality>(
+                  value: _audioQuality,
+                  isExpanded: true,
+                  items: AudioQuality.values.map((quality) {
+                    return DropdownMenuItem(
+                      value: quality,
+                      child: Text(quality.value),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _audioQuality = value;
+                      });
+                    }
+                  },
+                ),
+              ),
+
+              // Thumbnail Quality Setting
+              ListTile(
+                title: Text('Thumbnail Quality'),
+                subtitle: DropdownButton<ThumbnailQuality>(
+                  value: _thumbnailQuality,
+                  isExpanded: true,
+                  items: ThumbnailQuality.values.map((quality) {
+                    return DropdownMenuItem(
+                      value: quality,
+                      child: Text(quality.value),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _thumbnailQuality = value;
+                      });
+                    }
+                  },
+                ),
+              ),
+
+              // Dark Mode Toggle
+              SwitchListTile(
+                title: Text('Dark Mode'),
+                value: _isDarkMode,
                 onChanged: (value) {
                   setState(() {
-                    _limit = value.toInt();
+                    _isDarkMode = value;
                   });
                 },
               ),
-            ),
 
-            // Add this to your SettingsDialog build method (inside the Column)
-            TextField(
-              controller: TextEditingController(
-                text: AppSettings.relatedSongTitle,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Related Song Title',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (value) => AppSettings.relatedSongTitle = value,
-            ),
-            // Add to your SettingsDialog build method, inside the Column
-            TextField(
-              controller: TextEditingController(
-                text: AppSettings.relatedSongTitle,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Lyrics Song Title',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (value) => AppSettings.relatedSongTitle = value,
-            ),
-            SizedBox(height: 8),
-            TextField(
-              controller: TextEditingController(
-                text: AppSettings.relatedSongArtist,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Lyrics Artist Name',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (value) => AppSettings.relatedSongArtist = value,
-            ),
-            SizedBox(height: 8),
-            TextField(
-              controller: TextEditingController(
-                text: AppSettings.relatedSongArtist,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Related Song Artist',
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (value) => AppSettings.relatedSongArtist = value,
-            ),
+              SizedBox(height: 16),
 
-            // Mode Selection
-            ListTile(
-              title: Text('Operation Mode'),
-              subtitle: DropdownButton<String>(
-                value: _mode,
-                isExpanded: true,
-                items: ['auto', 'batch', 'stream'].map((mode) {
-                  return DropdownMenuItem(
-                    value: mode,
-                    child: Text(mode.toUpperCase()),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _mode = value;
-                    });
-                  }
+              // Clear CLI Button
+              ElevatedButton.icon(
+                icon: Icon(Icons.clear),
+                label: Text('Clear CLI Output'),
+                onPressed: () {
+                  widget.onClearCli();
+                  Navigator.of(context).pop();
                 },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.blueGrey,
+                ),
               ),
-            ),
-
-            // Artist Name Input
-            TextField(
-              controller: _artistController,
-              decoration: InputDecoration(
-                labelText: 'Artist Name for Testing',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            SizedBox(height: 8),
-
-            // Audio Quality Setting
-            ListTile(
-              title: Text('Audio Quality'),
-              subtitle: DropdownButton<AudioQuality>(
-                value: _audioQuality,
-                isExpanded: true,
-                items: AudioQuality.values.map((quality) {
-                  return DropdownMenuItem(
-                    value: quality,
-                    child: Text(quality.value),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _audioQuality = value;
-                    });
-                  }
-                },
-              ),
-            ),
-
-            // Thumbnail Quality Setting
-            ListTile(
-              title: Text('Thumbnail Quality'),
-              subtitle: DropdownButton<ThumbnailQuality>(
-                value: _thumbnailQuality,
-                isExpanded: true,
-                items: ThumbnailQuality.values.map((quality) {
-                  return DropdownMenuItem(
-                    value: quality,
-                    child: Text(quality.value),
-                  );
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _thumbnailQuality = value;
-                    });
-                  }
-                },
-              ),
-            ),
-            SizedBox(height: 16),
-            ElevatedButton.icon(
-              icon: Icon(Icons.clear),
-              label: Text('Clear CLI Output'),
-              onPressed: () {
-                widget.onClearCli();
-                Navigator.of(context).pop();
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.blueGrey,
-              ),
-            ),
-
-            // Dark Mode Toggle
-            SwitchListTile(
-              title: Text('Dark Mode'),
-              value: _isDarkMode,
-              onChanged: (value) {
-                setState(() {
-                  _isDarkMode = value;
-                });
-              },
-            ),
-          ],
+            ],
+          ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            child: Text('Cancel', style: TextStyle(color: Colors.white70)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              // Save all settings
+              AppSettings.limit = _limit;
+              AppSettings.batchSize = _batchSize;
+              AppSettings.audioQuality = _audioQuality;
+              AppSettings.thumbnailQuality = _thumbnailQuality;
+              AppSettings.isDarkMode = _isDarkMode;
+              AppSettings.mode = _mode;
+              AppSettings.artistName = _artistController.text.trim();
+              AppSettings.testVideoId = _videoIdController.text.trim();
+              AppSettings.relatedSongTitle = _songTitleController.text.trim();
+              AppSettings.relatedSongArtist = _songArtistController.text.trim();
+
+              widget.onSettingsChanged();
+              Navigator.of(context).pop();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Save'),
+          ),
+        ],
       ),
-
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            // Save settings
-            AppSettings.limit = _limit;
-            AppSettings.audioQuality = _audioQuality;
-            AppSettings.thumbnailQuality = _thumbnailQuality;
-            AppSettings.isDarkMode = _isDarkMode;
-            AppSettings.mode = _mode;
-            AppSettings.artistName = _artistController.text.trim();
-
-            widget.onSettingsChanged();
-            Navigator.of(context).pop();
-          },
-          child: Text('Save'),
-        ),
-      ],
     );
   }
 }

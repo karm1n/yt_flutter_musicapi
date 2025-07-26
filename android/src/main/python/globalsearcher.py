@@ -1,16 +1,16 @@
-import base64
 from enum import Enum
 import logging
 import re
 from types import GeneratorType
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any, Dict, Generator, List, Optional
 import warnings
 import random
 import time
 import socket
 from urllib.error import URLError
-import requests
 import threading
+
+
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -26,9 +26,6 @@ except Exception as e:
     print("❌ Failed to import:", e)
 
 
-_instance = None
-
-
 class GeneratorState(Enum):
     CREATED = "created"
     RUNNING = "running"
@@ -36,6 +33,20 @@ class GeneratorState(Enum):
     CLOSED = "closed"
     ERROR = "error"
 
+
+
+# Enums for quality settings
+class AudioQuality(Enum):
+    LOW = 0
+    MED = 1
+    HIGH = 2
+    VERY_HIGH = 3
+
+class ThumbnailQuality(Enum):
+    LOW = 0
+    MED = 1
+    HIGH = 2
+    VERY_HIGH = 3
 
 class SafeGeneratorWrapper:
     """Wrapper that safely manages generator lifecycle and cancellation"""
@@ -450,8 +461,6 @@ class SearchInspector:
 
 
 
-
-
 def get_instance(cls):
     if cls._instance is None:
         cls._instance = cls()
@@ -504,19 +513,6 @@ def debug_dependencies():
     }
     return dependencies
 
-
-# Enums for quality settings
-class AudioQuality(Enum):
-    LOW = 0
-    MED = 1
-    HIGH = 2
-    VERY_HIGH = 3
-
-class ThumbnailQuality(Enum):
-    LOW = 0
-    MED = 1
-    HIGH = 2
-    VERY_HIGH = 3
 
 class YTMusicSearcher:
     def __init__(self, proxy: Optional[str] = None, country: str = "US"):
@@ -587,50 +583,143 @@ class YTMusicSearcher:
             'Accept-Encoding': 'gzip, deflate, br'
         }
 
+    # def get_audio_url(self, video_id: str, quality: AudioQuality = None) -> Optional[str]:
+    #     format_strategies = [
+    #         "bestaudio[ext=m4a]/bestaudio[ext=mp4]/best[ext=m4a]/best[ext=mp4]",
+    #         "320/256/251/250/249/140/139/171/18",
+    #         "bestaudio/best",
+    #         "worstaudio/worst"
+    #     ]
+        
+    #     for format_selector in format_strategies:
+    #         try:
+    #             ydl = self._get_ytdlp_instance(format_selector)
+    #             time.sleep(random.uniform(0.5, 1.5))
+                
+    #             info = ydl.extract_info(
+    #                 f"https://www.youtube.com/watch?v={video_id}",
+    #                 download=False,
+    #                 process=False
+    #             )
+    #             info = ydl.process_ie_result(info, download=False)
+                
+    #             if info.get('is_live') or info.get('availability') == 'unavailable':
+    #                 continue
+                    
+    #             if info.get('drm') or any(f.get('drm') for f in info.get('formats', [])):
+    #                 continue
+                    
+    #             requested_formats = info.get('requested_formats', [info])
+    #             formats = info.get('formats', requested_formats)
+                
+    #             audio_formats = [
+    #                 f for f in formats
+    #                 if f.get('acodec') != 'none'
+    #                 and f.get('url')
+    #                 and not any(x in f['url'].lower() for x in ["manifest", ".m3u8"])
+    #             ]
+                
+    #             if not audio_formats:
+    #                 continue
+                    
+    #             # Sort formats by audio bitrate (highest first)
+    #             audio_formats.sort(key=lambda f: f.get('abr', 0) or f.get('tbr', 0) or 0, reverse=True)
+                
+    #             # Try to find formats in this priority: 320 > 256 > 128
+    #             for target_bitrate in [320, 256, 128]:
+    #                 for fmt in audio_formats:
+    #                     current_bitrate = fmt.get('abr', 0) or fmt.get('tbr', 0) or 0
+    #                     if current_bitrate >= target_bitrate * 0.9:  # Allow 10% tolerance
+    #                         quality_found = None
+    #                         if current_bitrate >= 290:  # ~320kbps
+    #                             quality_found = "320kbps"
+    #                         elif current_bitrate >= 230:  # ~256kbps
+    #                             quality_found = "256kbps"
+    #                         else:  # ~128kbps
+    #                             quality_found = "128kbps"
+                            
+    #                         print(f"🎵 Found audio at {quality_found} (actual: {current_bitrate:.0f}kbps)")
+    #                         return fmt['url']
+                
+    #             # If no high quality formats found, return the best available
+    #             if audio_formats:
+    #                 current_bitrate = audio_formats[0].get('abr', 0) or audio_formats[0].get('tbr', 0) or 0
+    #                 print(f"⚠️ Using best available audio: {current_bitrate:.0f}kbps")
+    #                 return audio_formats[0]['url']
+                    
+    #         except yt_dlp.DownloadError as e:
+    #             if "HTTP Error 403" in str(e):
+    #                 time.sleep(2)
+    #                 continue
+    #             if "unavailable" in str(e).lower():
+    #                 break
+    #             continue
+    #         except (URLError, socket.timeout, ConnectionError):
+    #             time.sleep(2)
+    #             continue
+    #         except Exception:
+    #             continue
+        
+    #     print("❌ No suitable audio formats found")
+    #     return None
+
     def get_audio_url(self, video_id: str, quality: AudioQuality = None) -> Optional[str]:
+        # Define quality-based target bitrates
+        if quality is None:
+            quality = AudioQuality.HIGH
+            
+        quality_bitrates = {
+            AudioQuality.LOW: [128, 96, 64],
+            AudioQuality.MED: [192, 160, 128],
+            AudioQuality.HIGH: [256, 192, 160],
+            AudioQuality.VERY_HIGH: [320, 256, 192]
+        }
+        
+        target_bitrates = quality_bitrates.get(quality, [256, 192, 160])
+        
         format_strategies = [
             "bestaudio[ext=m4a]/bestaudio[ext=mp4]/best[ext=m4a]/best[ext=mp4]",
-            "251/250/249/140/139/171/18/22",
+            "320/256/251/250/249/140/139/171/18",
             "bestaudio/best",
             "worstaudio/worst"
         ]
-
+        
         for format_selector in format_strategies:
             try:
                 ydl = self._get_ytdlp_instance(format_selector)
                 time.sleep(random.uniform(0.5, 1.5))
-
+                
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}",
                     download=False,
                     process=False
                 )
                 info = ydl.process_ie_result(info, download=False)
-
+                
                 if info.get('is_live') or info.get('availability') == 'unavailable':
                     continue
-
+                    
                 if info.get('drm') or any(f.get('drm') for f in info.get('formats', [])):
                     continue
-
+                    
                 requested_formats = info.get('requested_formats', [info])
                 formats = info.get('formats', requested_formats)
-
+                
                 audio_formats = [
                     f for f in formats
                     if f.get('acodec') != 'none'
                     and f.get('url')
                     and not any(x in f['url'].lower() for x in ["manifest", ".m3u8"])
                 ]
-
+                
                 if not audio_formats:
                     continue
-
+                    
                 # Sort formats by audio bitrate (highest first)
                 audio_formats.sort(key=lambda f: f.get('abr', 0) or f.get('tbr', 0) or 0, reverse=True)
-
-                # Try to find formats in this priority: 320 > 256 > 128
-                for target_bitrate in [320, 256, 128]:
+                
+                # Try to find formats matching the requested quality
+                for target_bitrate in target_bitrates:
                     for fmt in audio_formats:
                         current_bitrate = fmt.get('abr', 0) or fmt.get('tbr', 0) or 0
                         if current_bitrate >= target_bitrate * 0.9:  # Allow 10% tolerance
@@ -639,18 +728,20 @@ class YTMusicSearcher:
                                 quality_found = "320kbps"
                             elif current_bitrate >= 230:  # ~256kbps
                                 quality_found = "256kbps"
-                            else:  # ~128kbps
+                            elif current_bitrate >= 150:  # ~192kbps
+                                quality_found = "192kbps"
+                            else:  # ~128kbps or lower
                                 quality_found = "128kbps"
                             
                             print(f"🎵 Found audio at {quality_found} (actual: {current_bitrate:.0f}kbps)")
                             return fmt['url']
-
-                # If no high quality formats found, return the best available
+                
+                # If no matching quality formats found, return the best available
                 if audio_formats:
                     current_bitrate = audio_formats[0].get('abr', 0) or audio_formats[0].get('tbr', 0) or 0
                     print(f"⚠️ Using best available audio: {current_bitrate:.0f}kbps")
                     return audio_formats[0]['url']
-
+                    
             except yt_dlp.DownloadError as e:
                 if "HTTP Error 403" in str(e):
                     time.sleep(2)
@@ -663,7 +754,7 @@ class YTMusicSearcher:
                 continue
             except Exception:
                 continue
-
+        
         print("❌ No suitable audio formats found")
         return None
 
@@ -869,21 +960,50 @@ class YTMusicSearcher:
         return album_art
 
     def _get_audio_url_with_retries(self, video_id: str, audio_quality: AudioQuality) -> Optional[str]:
-        """Unified method to get audio URL with retries"""
-        print(f"🎵 Getting audio URL for: {video_id}")
+        """Unified method to get audio URL with retries and fallback qualities"""
+        print(f"🎵 Getting audio URL for: {video_id} with requested quality: {audio_quality}")
         
-        for attempt in range(3):
-            try:
-                audio_url = self.get_audio_url(video_id, audio_quality)
-                if audio_url:
-                    print(f"✅ Got audio URL on attempt {attempt + 1}")
-                    return audio_url
-                else:
-                    print(f"⚠️ No audio URL on attempt {attempt + 1}")
-            except Exception as e:
-                print(f"❌ Audio URL attempt {attempt + 1} failed: {e}")
-            time.sleep(1)
+        # Define fallback strategy - try requested quality first, then lower ones
+        quality_fallbacks = []
         
+        if audio_quality == AudioQuality.VERY_HIGH:
+            quality_fallbacks = [AudioQuality.VERY_HIGH, AudioQuality.HIGH, AudioQuality.MED]
+        elif audio_quality == AudioQuality.HIGH:
+            quality_fallbacks = [AudioQuality.HIGH, AudioQuality.MED, AudioQuality.LOW]
+        elif audio_quality == AudioQuality.MED:
+            quality_fallbacks = [AudioQuality.MED, AudioQuality.LOW]
+        else:
+            quality_fallbacks = [AudioQuality.LOW]
+        
+        for quality_attempt in quality_fallbacks:
+            print(f"   Trying quality: {quality_attempt}")
+            
+            for attempt in range(2):  # Reduced attempts per quality
+                try:
+                    print(f"   Attempt {attempt + 1}/2 with quality {quality_attempt}")
+                    
+                    audio_url = self.get_audio_url(video_id, quality_attempt)
+                    if audio_url:
+                        print(f"✅ Successfully got audio URL with quality {quality_attempt} on attempt {attempt + 1}")
+                        return audio_url
+                    else:
+                        print(f"⚠️ No audio URL returned with quality {quality_attempt} on attempt {attempt + 1}")
+                    
+                except Exception as e:
+                    print(f"❌ Exception with quality {quality_attempt}, attempt {attempt + 1}: {e}")
+                    
+                    # If it's a rate limit error, wait longer
+                    if any(code in str(e) for code in ["403", "429", "rate", "limit"]):
+                        print(f"   📛 Rate limit detected, waiting 15 seconds...")
+                        time.sleep(15)
+                    else:
+                        time.sleep(3)  # Normal retry delay
+                
+                # Don't retry immediately if we got None (video might be unavailable)
+                if attempt == 0:
+                    time.sleep(2)
+        
+        print(f"❌ All quality levels and retries failed for {video_id}")
         return None
 
     def _build_song_data(self, video_id: str, title: str, artists: str, duration: str, 
@@ -1019,361 +1139,6 @@ class YTMusicSearcher:
 
 
 
-
-
-
-
-    def get_song_details(
-        self,
-        songs: List[Dict[str, str]],
-        thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "HIGH",
-        include_audio_url: bool = True,
-        include_album_art: bool = True,
-        mode: str = "batch"
-    ) -> Union[Generator[dict, None, None], Optional[dict]]:
-        """Get song details with flexible return type based on mode"""
-        if mode not in ["single", "batch"]:
-            raise ValueError("Mode must be either 'single' or 'batch'")
-
-        if mode == "single":
-            if not songs:
-                return None
-            
-            song = songs[0]
-            song_name = song.get("song_name", "")
-            artist_name = song.get("artist_name", "")
-            
-            if not song_name or not artist_name:
-                print("PythonEngineExceptionsCritical: ⚠️ Missing song_name or artist_name for SingleSongDetails")
-                return None
-            
-            print(f"\nPythonEngine: 🔍 Processing single song: '{song_name}' by '{artist_name}' SingleSongDetails")
-            
-            try:
-                details = self._get_single_song_details(
-                    song_name=song_name,
-                    artist_name=artist_name,
-                    thumb_quality=thumb_quality,
-                    audio_quality=audio_quality,
-                    include_audio_url=include_audio_url,
-                    include_album_art=include_album_art
-                )
-                return details
-            except Exception as e:
-                print(f"PythonEngineExceptionsCritical: ❌ Error processing song '{song_name}': {str(e)}")
-                return None
-        else:
-            # Batch mode - return generator with yield
-            print(f"PythonEngineInspector: 🎶 Processing batch of {len(songs)} songs")
-            return self._process_batch_songs(
-                songs=songs,
-                thumb_quality=thumb_quality,
-                audio_quality=audio_quality,
-                include_audio_url=include_audio_url,
-                include_album_art=include_album_art
-            )
-
-    def _get_single_song_details(
-        self,
-        song_name: str,
-        artist_name: str,
-        thumb_quality: ThumbnailQuality,
-        audio_quality: AudioQuality,
-        include_audio_url: bool,
-        include_album_art: bool
-    ) -> Optional[dict]:
-        """Internal method to get details for a single song"""
-        query = f"{song_name} {artist_name}"
-        video_id = None
-        song_data = None
-        
-        for attempt in range(3):
-            try:
-                results = self.ytmusic.search(query, filter="songs", limit=5)
-                
-                if not results:
-                    print("PythonEngineExceptionsCritical: ❌ No results found for query SingleSongDetails")
-                    return None
-                    
-                # Find best matching song using string matching
-                best_match = None
-                best_score = 0
-                
-                # Pre-process search terms
-                search_song = song_name.lower().strip()
-                search_artist = artist_name.lower().strip()
-                
-                for item in results:
-                    title = item.get("title", "").lower().strip()
-                    artists = [a.get("name", "").lower().strip() for a in item.get("artists", [])]
-                    
-                    # Calculate title match (check if search term is in title)
-                    title_match = 100 if search_song in title else 0
-                    
-                    # Calculate artist match (check if any artist matches)
-                    artist_match = 100 if any(
-                        search_artist in artist for artist in artists
-                    ) else 0
-                    
-                    # Simple scoring - prioritize exact matches
-                    if title_match == 100 and artist_match == 100:
-                        # Perfect match found, use it immediately
-                        song_data = item
-                        video_id = item.get("videoId")
-                        break
-                        
-                    # Otherwise calculate partial score
-                    total_score = (title_match * 0.6) + (artist_match * 0.4)
-                    
-                    if total_score > best_score:
-                        best_score = total_score
-                        best_match = item
-                
-                if video_id:  # If we found perfect match and broke early
-                    break
-                    
-                # Use best match if we have one, otherwise first result
-                if best_match and best_score > 0:
-                    song_data = best_match
-                    print(f"PythonEngineInspector: Using best match (score: {best_score}) SingleSongDetails ")
-                else:
-                    song_data = results[0]
-                    print("PythonEngineInspector: ⚠️ SingleSongDetails Using first result (no good matches found)")
-                
-                video_id = song_data.get("videoId")
-                if video_id:
-                    break
-                    
-            except Exception as e:
-                print(f"PythonEngineExceptionsCritical: ❌ SingleSongDetails Search attempt {attempt + 1} failed: {e}")
-                if attempt == 2:
-                    return None
-                time.sleep(2 ** attempt)
-                self._initialize_ytmusic()
-        
-        if not video_id or not song_data:
-            print("PythonEngineExceptionsCritical: ❌ SingleSongDetails Song not found")
-            return None
-        
-        print(f"PythonEngine: ✅ Found song: {song_data.get('title')} (ID: {video_id})")
-        
-        # Extract basic info
-        title = song_data.get("title", "Unknown Title")
-        artists = ", ".join(a.get("name", "Unknown") for a in song_data.get("artists", [])) or "Unknown Artist"
-        duration = song_data.get("duration")
-        
-        # Build song data using unified method
-        result = {
-            "title": title,
-            "artists": artists,
-            "videoId": video_id,
-            "duration": duration,
-        }
-        
-        # Get album art if requested
-        if include_album_art:
-            try:
-                album_art = self._get_album_art_unified(
-                    video_id, 
-                    song_data, 
-                    thumb_quality
-                )
-                result["albumArt"] = album_art
-            except Exception as e:
-                print(f"PythonEngineExceptionsCritical: ❌ SingleSongDetails Error getting album art: {e}")
-                result["albumArt"] = None
-        
-        # Get audio URL if requested
-        if include_audio_url:
-            try:
-                audio_url = self._get_audio_url_with_retries(video_id, audio_quality)
-                result["audioUrl"] = audio_url
-            except Exception as e:
-                print(f"PythonEngineExceptionsCritical: ❌ SingleSongDetails Error getting audio URL: {e}")
-                result["audioUrl"] = None
-        
-        return result
-        
-    def _process_batch_songs(
-        self,
-        songs: List[Dict[str, str]],
-        thumb_quality: ThumbnailQuality,
-        audio_quality: AudioQuality,
-        include_audio_url: bool,
-        include_album_art: bool
-    ) -> Generator[dict, None, None]:
-        """Internal method to process songs in batch mode"""
-        total_songs = len(songs)
-        processed_count = 0
-        success_count = 0
-        
-        print(f"PythonEngineInspector: 🎶 Starting batch processing of {total_songs} songs BatchSongDetails")
-        
-        for i, song in enumerate(songs, 1):
-            song_name = song.get("song_name", "").strip()
-            artist_name = song.get("artist_name", "").strip()
-
-            if not song_name or not artist_name:
-                print(f"PythonEngineExceptionsCritical: ⚠️ Skipping item {i}: Missing song_name or artist_name for BatchSongDetails")
-                continue
-
-            print(f"\nPythonEngine: 🔍 Processing song {i}/{total_songs}: '{song_name}' by '{artist_name}' BatchSongDetails")
-            processed_count += 1
-
-            try:
-                details = self._get_single_song_details(
-                    song_name=song_name,
-                    artist_name=artist_name,
-                    thumb_quality=thumb_quality,
-                    audio_quality=audio_quality,
-                    include_audio_url=include_audio_url,
-                    include_album_art=include_album_art
-                )
-
-                if details:
-                    success_count += 1
-                    print(f"PythonEngine: ✅ Successfully processed song {i} BatchSongDetails")
-                    yield details
-                else:
-                    print(f"PythonEngineExceptionsCritical: ❌ Song not found: '{song_name}' by '{artist_name}' BatchSongDetails")
-                    yield {
-                        "error": f"Song not found: '{song_name}'",
-                        "success": False,
-                        "song_name": song_name,
-                        "artist_name": artist_name
-                    }
-
-            except Exception as e:
-                print(f"PythonEngineExceptionsCritical: ❌ Error processing song '{song_name}': {str(e)} BatchSongDetails")
-                yield {
-                    "error": str(e),
-                    "success": False,
-                    "song_name": song_name,
-                    "artist_name": artist_name
-                }
-
-            # Small delay between songs to avoid rate limiting
-            if i < total_songs:
-                time.sleep(0.5)
-
-        print(f"PythonEngineInspector: ✅ Batch processing completed. Success: {success_count}/{processed_count} BatchSongDetails")
-
-    def stream_song_details(
-        self,
-        songs: List[Dict[str, str]],
-        thumb_quality: str = "VERY_HIGH",
-        audio_quality: str = "HIGH",
-        include_audio_url: bool = True,
-        include_album_art: bool = True
-    ) -> Generator[dict, None, None]:
-        import time
-        inspector = SearchInspector.get_instance()
-        search_id = f"batch_{int(time.time())}"
-
-        def generate_logic():
-            total_songs = len(songs)
-            processed_count = 0
-            success_count = 0
-
-            print(f"[{search_id}] 🎶 Starting streaming of {total_songs} songs")
-
-            try:
-                for i, song in enumerate(songs, 1):
-                    if not inspector.is_active(search_id):
-                        print(f"[{search_id}] ❌ Cancelled before processing song {i}")
-                        return
-
-                    song_name = song.get("song_name", "").strip()
-                    artist_name = song.get("artist_name", "").strip()
-
-                    if not song_name or not artist_name:
-                        yield {
-                            "error": "Missing song_name or artist_name",
-                            "success": False,
-                            "song_name": song_name,
-                            "artist_name": artist_name
-                        }
-                        continue
-
-                    print(f"[{search_id}] 🔍 Processing {i}/{total_songs}: '{song_name}' by '{artist_name}'")
-                    processed_count += 1
-
-                    try:
-                        if not inspector.is_active(search_id):
-                            return
-
-                        details = self._get_single_song_details(
-                            song_name=song_name,
-                            artist_name=artist_name,
-                            thumb_quality=thumb_quality,
-                            audio_quality=audio_quality,
-                            include_audio_url=include_audio_url,
-                            include_album_art=include_album_art
-                        )
-
-                        if not inspector.is_active(search_id):
-                            return
-
-                        if details:
-                            success_count += 1
-                            if not inspector.is_active(search_id):
-                                return
-
-                            yield {
-                                **details,
-                                "success": True,
-                                "processed": processed_count,
-                                "total": total_songs
-                            }
-                        else:
-                            if not inspector.is_active(search_id):
-                                return
-
-                            yield {
-                                "error": f"Song not found: '{song_name}'",
-                                "success": False,
-                                "song_name": song_name,
-                                "artist_name": artist_name,
-                                "processed": processed_count,
-                                "total": total_songs
-                            }
-
-                    except Exception as e:
-                        if not inspector.is_active(search_id):
-                            return
-                        yield {
-                            "error": str(e),
-                            "success": False,
-                            "song_name": song_name,
-                            "artist_name": artist_name,
-                            "processed": processed_count,
-                            "total": total_songs
-                        }
-
-                    if i < total_songs:
-                        time.sleep(0.5)
-
-                print(f"[{search_id}] ✅ Stream finished: {success_count}/{processed_count}")
-
-            except GeneratorExit:
-                print(f"[{search_id}] ✋ Generator closed by cancellation")
-                raise
-
-        def generator():
-            yield from generate_logic()
-
-        gen = generator()
-        inspector.register_search(search_id, "batch_stream", gen)
-
-        try:
-            yield from gen
-        finally:
-            inspector.cancel_search(search_id)
-
-
-
-
     def get_artist_songs(
         self,
         artist_name: str,
@@ -1386,6 +1151,10 @@ class YTMusicSearcher:
         import time
         inspector = SearchInspector.get_instance()
         search_id = f"artist_{hash(artist_name)}_{int(time.time())}"
+
+        # Convert string parameters to enum objects
+        thumb_quality_enum = ThumbnailQuality[thumb_quality] if hasattr(ThumbnailQuality, thumb_quality) else ThumbnailQuality.VERY_HIGH
+        audio_quality_enum = AudioQuality[audio_quality] if hasattr(AudioQuality, audio_quality) else AudioQuality.HIGH
 
         def generate_logic():
             retry_count = 0
@@ -1433,8 +1202,8 @@ class YTMusicSearcher:
                                 artists=artists,
                                 duration=song.get("duration"),
                                 song_data=song,
-                                thumb_quality=thumb_quality,
-                                audio_quality=audio_quality,
+                                thumb_quality=thumb_quality_enum,  # Pass enum instead of string
+                                audio_quality=audio_quality_enum,  # Pass enum instead of string
                                 include_album_art=include_album_art,
                                 include_audio_url=include_audio_url,
                                 year=song.get("year"),
@@ -1475,61 +1244,275 @@ class YTMusicSearcher:
             inspector.cancel_search(search_id)
 
 
-
-
-
-
-    def fetch_ytmusic_lyrics(self, title: str, artist: str) -> Optional[Dict[str, Any]]:
+    def get_audio_url_flexible(
+        self,
+        title: Optional[str] = None,
+        artist: Optional[str] = None,
+        video_id: Optional[str] = None,
+        audio_quality: str = "HIGH"
+    ) -> Optional[str]:
         """
-        Fetch plain lyrics using YTMusicAPI and parse them line-by-line.
-        No timestamp data is available, so timestamps are set to -1.
+        Get audio URL for a song using flexible input parameters.
+        
+        Args:
+            title: Song title (optional if video_id provided)
+            artist: Artist name (optional if video_id provided)
+            video_id: YouTube video ID (optional if title/artist provided)
+            audio_quality: Audio quality ("LOW", "MED", "HIGH", "VERY_HIGH")
+            
+        Returns:
+            str: Audio URL if found, None otherwise
+            
+        Raises:
+            ValueError: If no valid identification parameters are provided
+        """
+        import time
+        
+        # Validate input parameters
+        if not video_id and not (title or artist):
+            raise ValueError("Either video_id OR (title and/or artist) must be provided")
+        
+        # Validate and normalize audio quality
+        valid_qualities = ["LOW", "MED", "HIGH", "VERY_HIGH"]
+        audio_quality = audio_quality.upper()
+        
+        # Handle common variations
+        if audio_quality == "MEDIUM":
+            audio_quality = "MED"
+        elif audio_quality not in valid_qualities:
+            print(f"⚠️ Invalid audio quality '{audio_quality}', using HIGH as default")
+            audio_quality = "HIGH"
+        
+        target_video_id = video_id
+        
+        # If video_id not provided, search for it using title/artist
+        if not target_video_id:
+            print(f"🔍 Searching for video ID using title: '{title}', artist: '{artist}'")
+            
+            # Build search query
+            search_terms = []
+            if title:
+                search_terms.append(title.strip())
+            if artist:
+                search_terms.append(artist.strip())
+            
+            search_query = " ".join(search_terms)
+            
+            if not search_query:
+                raise ValueError("No valid search terms provided")
+            
+            # Search for the song
+            max_search_attempts = 3
+            for attempt in range(max_search_attempts):
+                try:
+                    search_results = self.ytmusic.search(search_query, filter="songs", limit=10)
+                    
+                    if not search_results:
+                        print(f"❌ No search results found for: {search_query}")
+                        return None
+                    
+                    # Find best match
+                    best_match = None
+                    best_score = 0
+                    
+                    for result in search_results:
+                        result_title = result.get("title", "").lower().strip()
+                        result_artists = [a.get("name", "").lower().strip() for a in result.get("artists", [])]
+                        
+                        # Calculate match score
+                        title_score = 0
+                        artist_score = 0
+                        
+                        if title:
+                            title_lower = title.lower().strip()
+                            if title_lower == result_title:
+                                title_score = 100  # Perfect match
+                            elif title_lower in result_title or result_title in title_lower:
+                                title_score = 80   # Partial match
+                        else:
+                            title_score = 50  # No title to match against
+                        
+                        if artist:
+                            artist_lower = artist.lower().strip()
+                            if any(artist_lower == ra for ra in result_artists):
+                                artist_score = 100  # Perfect match
+                            elif any(artist_lower in ra or ra in artist_lower for ra in result_artists):
+                                artist_score = 80   # Partial match
+                        else:
+                            artist_score = 50  # No artist to match against
+                        
+                        # Combined score (weighted toward title)
+                        total_score = (title_score * 0.6) + (artist_score * 0.4)
+                        
+                        if total_score > best_score:
+                            best_score = total_score
+                            best_match = result
+                    
+                    if best_match:
+                        target_video_id = best_match.get("videoId")
+                        matched_title = best_match.get("title", "Unknown")
+                        matched_artists = ", ".join(a.get("name", "Unknown") for a in best_match.get("artists", []))
+                        
+                        print(f"✅ Found match (score: {best_score:.1f}): '{matched_title}' by {matched_artists}")
+                        print(f"🆔 Video ID: {target_video_id}")
+                        break
+                    else:
+                        print(f"⚠️ No good matches found, using first result")
+                        target_video_id = search_results[0].get("videoId")
+                        break
+                        
+                except Exception as e:
+                    print(f"⚠️ Search attempt {attempt + 1} failed: {e}")
+                    if attempt == max_search_attempts - 1:
+                        print(f"❌ All search attempts failed")
+                        return None
+                    time.sleep(2 ** attempt)
+                    self._initialize_ytmusic()
+        
+        # Get audio URL using the video ID
+        if not target_video_id:
+            print(f"❌ No video ID available for audio extraction")
+            return None
+        
+        print(f"🎵 Extracting {audio_quality} quality audio for video ID: {target_video_id}")
+        
+        try:
+            # Use the existing get_audio_url method directly instead of _get_audio_url_with_retries
+            audio_url = self.get_audio_url(target_video_id, quality=None)
+            
+            if audio_url:
+                print(f"✅ Successfully extracted audio URL")
+                return audio_url
+            else:
+                print(f"❌ Failed to extract audio URL")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error extracting audio URL: {e}")
+            return None
+
+
+
+    def fetch_ytmusic_lyrics(self, title: str, artist: str) -> Dict[str, Any]:
+        """
+        Fetch plain lyrics using YTMusicAPI.
+        Returns consistent structure for Kotlin compatibility.
+        When no lyrics found, returns error message as lyrics data.
         """
         try:
-            search_results = self.ytmusic.search(f"{title} {artist}", filter="songs")
-            print(f"YTMusic search found {len(search_results)} results")
-
-            for result in search_results:
-                result_title = result.get('title', '').lower()
-                result_artists = [a['name'].lower() for a in result.get('artists', [])]
-                
-                # Match by title and artist
-                if title.lower() in result_title and any(artist.lower() in a for a in result_artists):
+            # Search for songs - artist first, then song title
+            search_query = f"{artist} {title}"
+            print(f"Searching for: {search_query}")
+            
+            search_results = self.ytmusic.search(search_query, filter="songs", limit=10)
+            
+            if not search_results:
+                error_msg = f"No search results found for '{title}' by '{artist}'"
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'lyrics': error_msg,  # Return error as lyrics data
+                    'total_lines': 0,
+                    'source': 'YTMusic'
+                }
+            
+            print(f"Found {len(search_results)} search results")
+            
+            # Try each result until we find lyrics
+            for i, result in enumerate(search_results):
+                try:
+                    if not isinstance(result, dict):
+                        print(f"Skipping non-dict result {i}")
+                        continue
+                    
                     video_id = result.get('videoId')
-                    if video_id:
-                        song_data = self.ytmusic.get_song(video_id)
-                        lyrics_info = song_data.get('lyrics')
-
-                        if lyrics_info:
-                            lyrics_data = self.ytmusic.get_lyrics(lyrics_info['lyricsId'])
-                            raw_lyrics = lyrics_data.get('lyrics', '').strip()
-
-                            if raw_lyrics:
-                                # Parse and clean lyrics
-                                lines = [
-                                    {
-                                        'timestamp': -1,
-                                        'text': line.strip(),
-                                        'time_formatted': ''
-                                    }
-                                    for line in raw_lyrics.split('\n')
-                                    if line.strip()
-                                ]
-                                
-                                if lines:
-                                    print(f"Parsed {len(lines)} lines from YTMusic")
-                                    return {
-                                        'success': True,
-                                        'lyrics': lines,
-                                        'source': 'YTMusic',
-                                        'total_lines': len(lines)
-                                    }
+                    if not video_id:
+                        print(f"No videoId in result {i}")
+                        continue
+                    
+                    result_title = result.get('title', '')
+                    result_artists = [artist.get('name', '') for artist in result.get('artists', [])]
+                    
+                    print(f"Trying result {i}: '{result_title}' by {result_artists}")
+                    
+                    # Get song details
+                    song_data = self.ytmusic.get_song(video_id)
+                    if not song_data or not isinstance(song_data, dict):
+                        print(f"No song data for {video_id}")
+                        continue
+                    
+                    # Check if lyrics are available
+                    lyrics_browse_id = song_data.get('lyrics')
+                    if not lyrics_browse_id:
+                        print(f"No lyrics available for '{result_title}'")
+                        continue
+                    
+                    print(f"Found lyrics browse ID: {lyrics_browse_id}")
+                    
+                    # Get the actual lyrics
+                    lyrics_data = self.ytmusic.get_lyrics(lyrics_browse_id)
+                    if not lyrics_data or not isinstance(lyrics_data, dict):
+                        print(f"Failed to get lyrics data for {lyrics_browse_id}")
+                        continue
+                    
+                    raw_lyrics = lyrics_data.get('lyrics', '')
+                    if not raw_lyrics or not isinstance(raw_lyrics, str):
+                        print(f"No lyrics text found")
+                        continue
+                    
+                    # Process lyrics into lines
+                    lyrics_lines = []
+                    for line_num, line in enumerate(raw_lyrics.strip().split('\n')):
+                        line = line.strip()
+                        if line:  # Skip empty lines
+                            lyrics_lines.append({
+                                'text': line,
+                                'timestamp': -1,  # No timestamp available
+                                'line_number': line_num
+                            })
+                    
+                    if lyrics_lines:
+                        print(f"Successfully found {len(lyrics_lines)} lyrics lines")
+                        return {
+                            'success': True,
+                            'lyrics': lyrics_lines,
+                            'source': 'YTMusic',
+                            'total_lines': len(lyrics_lines),
+                            'video_id': video_id,
+                            'song_info': {
+                                'title': result_title,
+                                'artists': result_artists,
+                                'duration': result.get('duration', ''),
+                                'thumbnails': result.get('thumbnails', [])
+                            }
+                        }
+                    else:
+                        print(f"No valid lyrics lines found")
+                        
+                except Exception as e:
+                    print(f"Error processing result {i}: {e}")
+                    continue
+            
+            # No lyrics found in any result - return error as lyrics data
+            error_msg = f"No lyrics found for '{title}' by '{artist}' searched in {len(search_results)} results"
+            return {
+                'success': False,
+                'error': error_msg,
+                'lyrics': error_msg,  # Return error message as lyrics data
+                'total_lines': 0,
+                'source': 'YTMusic'
+            }
+            
         except Exception as e:
             print(f"YTMusic lyrics fetch error: {e}")
-
-        return {
-            'success': False,
-            'error': f"No YTMusic lyrics found for {title} by {artist}"
-        }
+            error_msg = f"YTMusic API error: {str(e)}"
+            return {
+                'success': False,
+                'error': error_msg,
+                'lyrics': error_msg,  # Return error message as lyrics data
+                'total_lines': 0,
+                'source': 'YTMusic'
+            }
     
     def SearchStreamsCleanup(self):
         """Clean up resources"""
@@ -1555,6 +1538,7 @@ class YTMusicRelatedFetcher:
         self.country = country.upper() if country else "US"
         self.ytmusic = None
         self._initialize_ytmusic()
+        
         
     def _initialize_ytmusic(self):
         max_retries = 3
@@ -2024,7 +2008,248 @@ class YTMusicRelatedFetcher:
             print(f"YTMusicRelatedFetcher cleanup error: {e}")
 
 
+class LyricsProcessor:
+    """Lyrics processor uses levenshtein_distance."""
+    
+    def __init__(self):
+        self.instrumental_markers = {
+            'instrumental', 'outro', 'intro', 'bridge', 'solo', 'interlude',
+            'breakdown', 'drop', 'beat', 'music', 'melody', 'tune'
+        }
+        
+        self.section_markers = {
+            'verse', 'chorus', 'bridge', 'outro', 'intro', 'pre-chorus',
+            'hook', 'refrain', 'breakdown', 'interlude'
+        }
+        
+        self.stop_words = {
+            'ft', 'feat', 'featuring', 'remix', 'edit', 'version', 'official',
+            'video', 'audio', 'remastered', 'deluxe', 'extended', 'radio'
+        }
 
+    def levenshtein_distance(self, s1: str, s2: str) -> int:
+        """Calculate Levenshtein distance between two strings (pure Python)."""
+        if len(s1) < len(s2):
+            return self.levenshtein_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
+
+    def similarity_ratio(self, s1: str, s2: str) -> float:
+        """Calculate similarity ratio between two strings (0-100)."""
+        if not s1 and not s2:
+            return 100.0
+        if not s1 or not s2:
+            return 0.0
+        
+        max_len = max(len(s1), len(s2))
+        distance = self.levenshtein_distance(s1.lower(), s2.lower())
+        return ((max_len - distance) / max_len) * 100
+
+    def clean_string(self, text: str) -> str:
+        """Clean a string for better matching."""
+        if not text:
+            return ""
+            
+        text = text.lower().strip()
+        text = re.sub(r'\([^)]*\)', '', text)
+        text = re.sub(r'\[[^\]]*\]', '', text)
+        text = re.sub(r'[^\w\s\-]', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        
+        words = text.split()
+        words = [word for word in words if word not in self.stop_words and len(word) > 1]
+        
+        return ' '.join(words).strip()
+
+    def calculate_match_score(self, result: Dict, target_title: str, target_artist: str) -> float:
+        """Calculate relevance score for a search result."""
+        score = 0.0
+        
+        result_title = result.get('title', '')
+        result_artists = [a.get('name', '') for a in result.get('artists', [])]
+        
+        clean_target_title = self.clean_string(target_title)
+        clean_result_title = self.clean_string(result_title)
+        clean_target_artist = self.clean_string(target_artist)
+        
+        # Title matching
+        if clean_target_title and clean_result_title:
+            if clean_target_title == clean_result_title:
+                score += 50
+            elif clean_target_title in clean_result_title or clean_result_title in clean_target_title:
+                score += 40
+            else:
+                title_similarity = self.similarity_ratio(clean_target_title, clean_result_title)
+                score += (title_similarity / 100) * 35
+        
+        # Artist matching
+        best_artist_score = 0
+        for result_artist in result_artists:
+            clean_result_artist = self.clean_string(result_artist.get('name', ''))
+            
+            if clean_target_artist and clean_result_artist:
+                if clean_target_artist == clean_result_artist:
+                    best_artist_score = 40
+                    break
+                elif clean_target_artist in clean_result_artist or clean_result_artist in clean_target_artist:
+                    best_artist_score = max(best_artist_score, 30)
+                else:
+                    artist_similarity = self.similarity_ratio(clean_target_artist, clean_result_artist)
+                    if artist_similarity > 70:
+                        best_artist_score = max(best_artist_score, (artist_similarity / 100) * 25)
+        
+        score += best_artist_score
+        
+        if result.get('resultType') == 'song':
+            score += 10
+        
+        return min(score, 100.0)
+
+    def is_instrumental_line(self, line: str) -> bool:
+        """Check if a line indicates instrumental content."""
+        line_lower = line.lower().strip()
+        
+        for marker in self.instrumental_markers:
+            if marker in line_lower:
+                return True
+        
+        if re.match(r'^[^\w]*$', line_lower):
+            return True
+        
+        words = line_lower.split()
+        if len(words) >= 3:
+            unique_words = set(words)
+            if len(unique_words) <= 2 and all(len(word) <= 3 for word in unique_words):
+                return True
+        
+        return False
+
+    def detect_section_type(self, line: str) -> str:
+        """Detect what type of section a line represents."""
+        line_lower = line.lower().strip()
+        
+        for section in self.section_markers:
+            if line_lower.startswith(f'[{section}') or line_lower.startswith(f'({section}'):
+                return section
+            if line_lower == section or line_lower.startswith(f'{section}:'):
+                return section
+        
+        if any(word in line_lower for word in ['chorus', 'hook', 'refrain']):
+            return 'chorus'
+        
+        if any(word in line_lower for word in ['verse', 'stanza']):
+            return 'verse'
+        
+        return 'lyric'
+
+    def is_section_marker(self, line: str) -> bool:
+        """Check if line is a section marker rather than actual lyrics."""
+        section_type = self.detect_section_type(line)
+        return section_type in self.section_markers
+
+    def analyze_lyrics_quality(self, raw_lyrics: str) -> Dict[str, Any]:
+        """Analyze the quality and characteristics of lyrics."""
+        if not raw_lyrics:
+            return {
+                'is_instrumental': True,
+                'quality_score': 0,
+                'line_count': 0,
+                'lyrical_line_count': 0,
+                'has_structure': False
+            }
+        
+        lines = [line.strip() for line in raw_lyrics.split('\n') if line.strip()]
+        
+        lyrical_lines = 0
+        instrumental_lines = 0
+        section_markers = 0
+        
+        for line in lines:
+            if self.is_instrumental_line(line):
+                instrumental_lines += 1
+            elif self.is_section_marker(line):
+                section_markers += 1
+            else:
+                lyrical_lines += 1
+        
+        total_lines = len(lines)
+        quality_score = 0
+        if total_lines > 0:
+            lyrical_ratio = lyrical_lines / total_lines
+            quality_score = lyrical_ratio * 100
+        
+        is_instrumental = (instrumental_lines > lyrical_lines) or (lyrical_lines < 5)
+        
+        return {
+            'is_instrumental': is_instrumental,
+            'quality_score': quality_score,
+            'line_count': total_lines,
+            'lyrical_line_count': lyrical_lines,
+            'instrumental_line_count': instrumental_lines,
+            'section_marker_count': section_markers,
+            'has_structure': section_markers > 0
+        }
+
+    def process_lyrics(self, raw_lyrics: str) -> List[Dict[str, Any]]:
+        """Process raw lyrics into structured format with analysis."""
+        if not raw_lyrics:
+            return []
+        
+        lines = []
+        current_section = 'verse'
+        
+        for line_num, line in enumerate(raw_lyrics.split('\n')):
+            line = line.strip()
+            
+            if not line:
+                continue
+            
+            if self.is_instrumental_line(line):
+                continue
+            
+            if self.is_section_marker(line):
+                current_section = self.detect_section_type(line)
+                lines.append({
+                    'timestamp': -1,
+                    'text': line,
+                    'time_formatted': '',
+                    'line_number': line_num,
+                    'section_type': 'marker',
+                    'section': current_section,
+                    'is_instrumental': False,
+                    'is_section_marker': True
+                })
+                continue
+            
+            section_type = self.detect_section_type(line)
+            if section_type in self.section_markers:
+                current_section = section_type
+            
+            lines.append({
+                'timestamp': -1,
+                'text': line,
+                'time_formatted': '',
+                'line_number': line_num,
+                'section_type': 'lyric',
+                'section': current_section,
+                'is_instrumental': False,
+                'is_section_marker': False
+            })
+        
+        return lines
 
 
 
@@ -2067,252 +2292,252 @@ class YTMusicRelatedFetcher:
 #     return search_inspector.cleanup_stale(timeout)
 
 
-class DynamicLyricsProvider:
-    """
-    A dynamic lyrics provider that fetches lyrics with timestamps from KuGou.
-    Designed for Flutter/Kotlin integration to provide real-time lyrics display.
-    """
+# class DynamicLyricsProvider:
+#     """
+#     A dynamic lyrics provider that fetches lyrics with timestamps from KuGou.
+#     Designed for Flutter/Kotlin integration to provide real-time lyrics display.
+#     """
     
-    PAGE_SIZE = 8
-    HEAD_CUT_LIMIT = 30
-    DURATION_TOLERANCE = 8
-    ACCEPTED_REGEX = re.compile(r"\[(\d\d):(\d\d)\.(\d{2,3})\].*")
-    BANNED_REGEX = re.compile(r".+].+[:：].+")
+#     PAGE_SIZE = 8
+#     HEAD_CUT_LIMIT = 30
+#     DURATION_TOLERANCE = 8
+#     ACCEPTED_REGEX = re.compile(r"\[(\d\d):(\d\d)\.(\d{2,3})\].*")
+#     BANNED_REGEX = re.compile(r".+].+[:：].+")
     
-    def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
+#     def __init__(self):
+#         self.session = requests.Session()
+#         self.session.headers.update({
+#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+#         })
     
-    def normalize_title(self, title: str) -> str:
-        """Clean title for better search results"""
-        return re.sub(r'\(.*\)|（.*）|「.*」|『.*』|<.*>|《.*》|〈.*〉|＜.*＞', '', title).strip()
+#     def normalize_title(self, title: str) -> str:
+#         """Clean title for better search results"""
+#         return re.sub(r'\(.*\)|（.*）|「.*」|『.*』|<.*>|《.*》|〈.*〉|＜.*＞', '', title).strip()
     
-    def normalize_artist(self, artist: str) -> str:
-        """Clean artist name for better search results"""
-        artist = re.sub(r', | & |\.|和', '、', artist)
-        return re.sub(r'\(.*\)|（.*）', '', artist).strip()
+#     def normalize_artist(self, artist: str) -> str:
+#         """Clean artist name for better search results"""
+#         artist = re.sub(r', | & |\.|和', '、', artist)
+#         return re.sub(r'\(.*\)|（.*）', '', artist).strip()
     
-    def generate_keyword(self, title: str, artist: str) -> Dict[str, str]:
-        """Generate search keywords from title and artist"""
-        return {
-            'title': self.normalize_title(title),
-            'artist': self.normalize_artist(artist)
-        }
+#     def generate_keyword(self, title: str, artist: str) -> Dict[str, str]:
+#         """Generate search keywords from title and artist"""
+#         return {
+#             'title': self.normalize_title(title),
+#             'artist': self.normalize_artist(artist)
+#         }
     
-    def normalize_lyrics(self, lyrics: str) -> str:
-        """Clean and filter lyrics to keep only timestamped lines"""
-        lyrics = lyrics.replace("&apos;", "'")
-        lines = [line for line in lyrics.split('\n') if self.ACCEPTED_REGEX.match(line)]
+#     def normalize_lyrics(self, lyrics: str) -> str:
+#         """Clean and filter lyrics to keep only timestamped lines"""
+#         lyrics = lyrics.replace("&apos;", "'")
+#         lines = [line for line in lyrics.split('\n') if self.ACCEPTED_REGEX.match(line)]
         
-        # Remove useless info from beginning
-        head_cut_line = 0
-        for i in range(min(self.HEAD_CUT_LIMIT, len(lines)-1), -1, -1):
-            if self.BANNED_REGEX.match(lines[i]):
-                head_cut_line = i + 1
-                break
-        filtered_lines = lines[head_cut_line:]
+#         # Remove useless info from beginning
+#         head_cut_line = 0
+#         for i in range(min(self.HEAD_CUT_LIMIT, len(lines)-1), -1, -1):
+#             if self.BANNED_REGEX.match(lines[i]):
+#                 head_cut_line = i + 1
+#                 break
+#         filtered_lines = lines[head_cut_line:]
         
-        # Remove useless info from end
-        tail_cut_line = 0
-        for i in range(min(len(lines)-self.HEAD_CUT_LIMIT, len(lines)-1), -1, -1):
-            if self.BANNED_REGEX.match(lines[len(lines)-1-i]):
-                tail_cut_line = i + 1
-                break
-        final_lines = filtered_lines[:len(filtered_lines)-tail_cut_line] if tail_cut_line > 0 else filtered_lines
+#         # Remove useless info from end
+#         tail_cut_line = 0
+#         for i in range(min(len(lines)-self.HEAD_CUT_LIMIT, len(lines)-1), -1, -1):
+#             if self.BANNED_REGEX.match(lines[len(lines)-1-i]):
+#                 tail_cut_line = i + 1
+#                 break
+#         final_lines = filtered_lines[:len(filtered_lines)-tail_cut_line] if tail_cut_line > 0 else filtered_lines
         
-        return '\n'.join(final_lines)
+#         return '\n'.join(final_lines)
     
-    def search_songs(self, keyword: Dict[str, str]) -> Dict[str, Any]:
-        """Search for songs on KuGou to get hash"""
-        url = "https://mobileservice.kugou.com/api/v3/search/song"
-        params = {
-            'version': 9108,
-            'plat': 0,
-            'pagesize': self.PAGE_SIZE,
-            'showtype': 0,
-            'keyword': f"{keyword['title']} - {keyword['artist']}"
-        }
-        try:
-            response = self.session.get(url, params=params, timeout=10)
-            return response.json()
-        except Exception as e:
-            print(f"Error searching songs: {e}")
-            return {}
+#     def search_songs(self, keyword: Dict[str, str]) -> Dict[str, Any]:
+#         """Search for songs on KuGou to get hash"""
+#         url = "https://mobileservice.kugou.com/api/v3/search/song"
+#         params = {
+#             'version': 9108,
+#             'plat': 0,
+#             'pagesize': self.PAGE_SIZE,
+#             'showtype': 0,
+#             'keyword': f"{keyword['title']} - {keyword['artist']}"
+#         }
+#         try:
+#             response = self.session.get(url, params=params, timeout=10)
+#             return response.json()
+#         except Exception as e:
+#             print(f"Error searching songs: {e}")
+#             return {}
     
-    def search_lyrics_by_keyword(self, keyword: Dict[str, str], duration: int = -1) -> Dict[str, Any]:
-        """Search for lyrics by keyword"""
-        url = "https://lyrics.kugou.com/search"
-        params = {
-            'ver': 1,
-            'man': 'yes',
-            'client': 'pc',
-            'keyword': f"{keyword['title']} - {keyword['artist']}"
-        }
-        if duration != -1:
-            params['duration'] = duration * 1000
+#     def search_lyrics_by_keyword(self, keyword: Dict[str, str], duration: int = -1) -> Dict[str, Any]:
+#         """Search for lyrics by keyword"""
+#         url = "https://lyrics.kugou.com/search"
+#         params = {
+#             'ver': 1,
+#             'man': 'yes',
+#             'client': 'pc',
+#             'keyword': f"{keyword['title']} - {keyword['artist']}"
+#         }
+#         if duration != -1:
+#             params['duration'] = duration * 1000
         
-        try:
-            response = self.session.get(url, params=params, timeout=10)
-            return response.json()
-        except Exception as e:
-            print(f"Error searching lyrics by keyword: {e}")
-            return {}
+#         try:
+#             response = self.session.get(url, params=params, timeout=10)
+#             return response.json()
+#         except Exception as e:
+#             print(f"Error searching lyrics by keyword: {e}")
+#             return {}
     
-    def search_lyrics_by_hash(self, hash: str) -> Dict[str, Any]:
-        """Search for lyrics by song hash"""
-        url = "https://lyrics.kugou.com/search"
-        params = {
-            'ver': 1,
-            'man': 'yes',
-            'client': 'pc',
-            'hash': hash
-        }
-        try:
-            response = self.session.get(url, params=params, timeout=10)
-            return response.json()
-        except Exception as e:
-            print(f"Error searching lyrics by hash: {e}")
-            return {}
+#     def search_lyrics_by_hash(self, hash: str) -> Dict[str, Any]:
+#         """Search for lyrics by song hash"""
+#         url = "https://lyrics.kugou.com/search"
+#         params = {
+#             'ver': 1,
+#             'man': 'yes',
+#             'client': 'pc',
+#             'hash': hash
+#         }
+#         try:
+#             response = self.session.get(url, params=params, timeout=10)
+#             return response.json()
+#         except Exception as e:
+#             print(f"Error searching lyrics by hash: {e}")
+#             return {}
     
-    def download_lyrics(self, id: str, accesskey: str) -> Dict[str, Any]:
-        """Download lyrics content"""
-        url = "https://lyrics.kugou.com/download"
-        params = {
-            'fmt': 'lrc',
-            'charset': 'utf8',
-            'client': 'pc',
-            'ver': 1,
-            'id': id,
-            'accesskey': accesskey
-        }
-        try:
-            response = self.session.get(url, params=params, timeout=10)
-            return response.json()
-        except Exception as e:
-            print(f"Error downloading lyrics: {e}")
-            return {}
+#     def download_lyrics(self, id: str, accesskey: str) -> Dict[str, Any]:
+#         """Download lyrics content"""
+#         url = "https://lyrics.kugou.com/download"
+#         params = {
+#             'fmt': 'lrc',
+#             'charset': 'utf8',
+#             'client': 'pc',
+#             'ver': 1,
+#             'id': id,
+#             'accesskey': accesskey
+#         }
+#         try:
+#             response = self.session.get(url, params=params, timeout=10)
+#             return response.json()
+#         except Exception as e:
+#             print(f"Error downloading lyrics: {e}")
+#             return {}
     
-    def parse_lrc_timestamps(self, lyrics: str) -> List[Dict[str, Any]]:
-        """Parse LRC format and convert to structured format for Flutter"""
-        lines = []
-        for line in lyrics.split('\n'):
-            match = self.ACCEPTED_REGEX.match(line)
-            if match:
-                minutes = int(match.group(1))
-                seconds = int(match.group(2))
-                milliseconds = int(match.group(3).ljust(3, '0')[:3])  # Ensure 3 digits
+#     def parse_lrc_timestamps(self, lyrics: str) -> List[Dict[str, Any]]:
+#         """Parse LRC format and convert to structured format for Flutter"""
+#         lines = []
+#         for line in lyrics.split('\n'):
+#             match = self.ACCEPTED_REGEX.match(line)
+#             if match:
+#                 minutes = int(match.group(1))
+#                 seconds = int(match.group(2))
+#                 milliseconds = int(match.group(3).ljust(3, '0')[:3])  # Ensure 3 digits
                 
-                timestamp_ms = (minutes * 60 * 1000) + (seconds * 1000) + milliseconds
-                text = line.split(']', 1)[1].strip() if ']' in line else ""
+#                 timestamp_ms = (minutes * 60 * 1000) + (seconds * 1000) + milliseconds
+#                 text = line.split(']', 1)[1].strip() if ']' in line else ""
                 
-                if text:  # Only add non-empty lines
-                    lines.append({
-                        'timestamp': timestamp_ms,
-                        'text': text,
-                        'time_formatted': f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
-                    })
+#                 if text:  # Only add non-empty lines
+#                     lines.append({
+#                         'timestamp': timestamp_ms,
+#                         'text': text,
+#                         'time_formatted': f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+#                     })
         
-        return sorted(lines, key=lambda x: x['timestamp'])
+#         return sorted(lines, key=lambda x: x['timestamp'])
     
-    def fetch_lyrics(self, title: str, artist: str, duration: int = -1) -> Optional[Dict[str, Any]]:
-        """
-        Main method to fetch lyrics with timestamps.
-        Returns simplified structured data suitable for Flutter/Kotlin integration.
-        """
-        print(f"Starting lyrics fetch for: {title} by {artist}")
+#     def fetch_lyrics(self, title: str, artist: str, duration: int = -1) -> Optional[Dict[str, Any]]:
+#         """
+#         Main method to fetch lyrics with timestamps.
+#         Returns simplified structured data suitable for Flutter/Kotlin integration.
+#         """
+#         print(f"Starting lyrics fetch for: {title} by {artist}")
         
-        keyword = self.generate_keyword(title, artist)
-        print(f"Generated keyword: {keyword}")
+#         keyword = self.generate_keyword(title, artist)
+#         print(f"Generated keyword: {keyword}")
 
-        # First try searching by song hash
-        print("Searching songs by keyword...")
-        songs = self.search_songs(keyword)
-        print(f"Found {len(songs.get('data', {}).get('info', []))} song matches")
+#         # First try searching by song hash
+#         print("Searching songs by keyword...")
+#         songs = self.search_songs(keyword)
+#         print(f"Found {len(songs.get('data', {}).get('info', []))} song matches")
 
-        for song in songs.get('data', {}).get('info', []):
-            try:
-                if duration == -1 or abs(song['duration'] - duration) <= self.DURATION_TOLERANCE:
-                    print(f"Trying song hash: {song['hash']}")
-                    lyrics_data = self.search_lyrics_by_hash(song['hash'])
-                    print(f"Lyrics search result: {lyrics_data}")
+#         for song in songs.get('data', {}).get('info', []):
+#             try:
+#                 if duration == -1 or abs(song['duration'] - duration) <= self.DURATION_TOLERANCE:
+#                     print(f"Trying song hash: {song['hash']}")
+#                     lyrics_data = self.search_lyrics_by_hash(song['hash'])
+#                     print(f"Lyrics search result: {lyrics_data}")
 
-                    if lyrics_data.get('candidates'):
-                        candidate = lyrics_data['candidates'][0]
-                        print(f"Downloading lyrics for candidate: {candidate}")
-                        lyrics = self.download_lyrics(candidate['id'], candidate['accesskey'])
-                        print(f"Downloaded lyrics content: {lyrics.get('content') is not None}")
+#                     if lyrics_data.get('candidates'):
+#                         candidate = lyrics_data['candidates'][0]
+#                         print(f"Downloading lyrics for candidate: {candidate}")
+#                         lyrics = self.download_lyrics(candidate['id'], candidate['accesskey'])
+#                         print(f"Downloaded lyrics content: {lyrics.get('content') is not None}")
 
-                        if lyrics.get('content'):
-                            try:
-                                content = base64.b64decode(lyrics['content']).decode('utf-8')
-                                normalized = self.normalize_lyrics(content)
-                                print(f"Normalized lyrics length: {len(normalized)} chars")
+#                         if lyrics.get('content'):
+#                             try:
+#                                 content = base64.b64decode(lyrics['content']).decode('utf-8')
+#                                 normalized = self.normalize_lyrics(content)
+#                                 print(f"Normalized lyrics length: {len(normalized)} chars")
 
-                                if "纯音乐，请欣赏" in normalized or "酷狗音乐  就是歌多" in normalized:
-                                    print("Skipping instrumental track")
-                                    continue
+#                                 if "纯音乐，请欣赏" in normalized or "酷狗音乐  就是歌多" in normalized:
+#                                     print("Skipping instrumental track")
+#                                     continue
                                 
-                                parsed_lyrics = self.parse_lrc_timestamps(normalized)
-                                print(f"Parsed {len(parsed_lyrics)} lyrics lines")
+#                                 parsed_lyrics = self.parse_lrc_timestamps(normalized)
+#                                 print(f"Parsed {len(parsed_lyrics)} lyrics lines")
 
-                                if parsed_lyrics:
-                                    return {
-                                        'success': True,
-                                        'lyrics': parsed_lyrics,
-                                        'source': 'KuGou',
-                                        'total_lines': len(parsed_lyrics)
-                                    }
-                            except Exception as e:
-                                print(f"Error processing lyrics: {e}")
-                                continue
-            except Exception as e:
-                print(f"Error processing song: {e}")
-                continue
+#                                 if parsed_lyrics:
+#                                     return {
+#                                         'success': True,
+#                                         'lyrics': parsed_lyrics,
+#                                         'source': 'KuGou',
+#                                         'total_lines': len(parsed_lyrics)
+#                                     }
+#                             except Exception as e:
+#                                 print(f"Error processing lyrics: {e}")
+#                                 continue
+#             except Exception as e:
+#                 print(f"Error processing song: {e}")
+#                 continue
 
-        # If not found, try searching by keyword
-        print("Trying lyrics search by keyword...")
-        lyrics_data = self.search_lyrics_by_keyword(keyword, duration)
-        print(f"Keyword search result: {lyrics_data}")
+#         # If not found, try searching by keyword
+#         print("Trying lyrics search by keyword...")
+#         lyrics_data = self.search_lyrics_by_keyword(keyword, duration)
+#         print(f"Keyword search result: {lyrics_data}")
 
-        if lyrics_data.get('candidates'):
-            candidate = lyrics_data['candidates'][0]
-            print(f"Downloading lyrics for keyword candidate: {candidate}")
-            lyrics = self.download_lyrics(candidate['id'], candidate['accesskey'])
-            print(f"Downloaded lyrics content: {lyrics.get('content') is not None}")
+#         if lyrics_data.get('candidates'):
+#             candidate = lyrics_data['candidates'][0]
+#             print(f"Downloading lyrics for keyword candidate: {candidate}")
+#             lyrics = self.download_lyrics(candidate['id'], candidate['accesskey'])
+#             print(f"Downloaded lyrics content: {lyrics.get('content') is not None}")
 
-            if lyrics.get('content'):
-                try:
-                    content = base64.b64decode(lyrics['content']).decode('utf-8')
-                    normalized = self.normalize_lyrics(content)
-                    print(f"Normalized lyrics length: {len(normalized)} chars")
+#             if lyrics.get('content'):
+#                 try:
+#                     content = base64.b64decode(lyrics['content']).decode('utf-8')
+#                     normalized = self.normalize_lyrics(content)
+#                     print(f"Normalized lyrics length: {len(normalized)} chars")
 
-                    if "纯音乐，请欣赏" in normalized or "酷狗音乐  就是歌多" in normalized:
-                        print("Returning not found for instrumental track")
-                        return {
-                            'success': False,
-                            'error': f'No lyrics found for {title} by {artist}'
-                        }
+#                     if "纯音乐，请欣赏" in normalized or "酷狗音乐  就是歌多" in normalized:
+#                         print("Returning not found for instrumental track")
+#                         return {
+#                             'success': False,
+#                             'error': f'No lyrics found for {title} by {artist}'
+#                         }
                     
-                    parsed_lyrics = self.parse_lrc_timestamps(normalized)
-                    print(f"Parsed {len(parsed_lyrics)} lyrics lines")
+#                     parsed_lyrics = self.parse_lrc_timestamps(normalized)
+#                     print(f"Parsed {len(parsed_lyrics)} lyrics lines")
 
-                    if parsed_lyrics:
-                        return {
-                            'success': True,
-                            'lyrics': parsed_lyrics,
-                            'source': 'KuGou',
-                            'total_lines': len(parsed_lyrics)
-                        }
-                except Exception as e:
-                    print(f"Error processing lyrics: {e}")
+#                     if parsed_lyrics:
+#                         return {
+#                             'success': True,
+#                             'lyrics': parsed_lyrics,
+#                             'source': 'KuGou',
+#                             'total_lines': len(parsed_lyrics)
+#                         }
+#                 except Exception as e:
+#                     print(f"Error processing lyrics: {e}")
 
-        print("No lyrics found after all attempts")
-        return {
-            'success': False,
-            'error': f'No lyrics found for {title} by {artist}'
-        }
+#         print("No lyrics found after all attempts")
+#         return {
+#             'success': False,
+#             'error': f'No lyrics found for {title} by {artist}'
+#         }
 
 # Test examples
 # if __name__ == "__main__":
@@ -2385,4 +2610,3 @@ class DynamicLyricsProvider:
 
 
     
-

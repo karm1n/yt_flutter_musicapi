@@ -89,32 +89,38 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     throw UnimplementedError('streamArtistSongs() has not been implemented.');
   }
 
-  Future<Map<String, dynamic>> getSongDetails({
-    required List<Map<String, String>> songs,
-    String mode = "batch",
-    String thumbQuality = "VERY_HIGH",
-    String audioQuality = "HIGH",
-    bool includeAudioUrl = true,
-    bool includeAlbumArt = true,
-  }) {
-    throw UnimplementedError('getSongDetails() has not been implemented.');
-  }
-
-  Stream<Map<String, dynamic>> streamSongDetails({
-    required List<Map<String, dynamic>> songs,
-    required String thumbQuality,
-    required String audioQuality,
-    required bool includeAudioUrl,
-    required bool includeAlbumArt,
-  }) {
-    throw UnimplementedError('streamSongDetails() has not been implemented.');
-  }
-
   Future<Map<String, dynamic>> fetchLyrics({
     required String songName,
     required String artistName,
   }) {
     throw UnimplementedError('fetchLyrics() has not been implemented.');
+  }
+
+  /// Get audio URL using flexible parameters
+  ///
+  /// At least one of [title], [artist], or [videoId] must be provided.
+  /// If [videoId] is provided, it will be used directly for faster results.
+  /// If only [title] and/or [artist] are provided, the method will search
+  /// for the song first and then extract the audio URL.
+  ///
+  /// Parameters:
+  /// - [title]: Song title (optional if videoId is provided)
+  /// - [artist]: Artist name (optional if videoId is provided)
+  /// - [videoId]: YouTube video ID (optional if title/artist provided)
+  /// - [audioQuality]: Audio quality level - "LOW", "MED", "HIGH", "VERY_HIGH"
+  ///
+  /// Returns a Map with:
+  /// - success: bool - Whether the operation was successful
+  /// - audioUrl: String - The direct audio URL (if successful)
+  /// - error: String - Error message (if failed)
+  /// - Additional metadata about the request
+  Future<Map<String, dynamic>> getAudioUrlFlexible({
+    String? title,
+    String? artist,
+    String? videoId,
+    String audioQuality = 'HIGH',
+  }) {
+    throw UnimplementedError('getAudioUrlFlexible() has not been implemented.');
   }
 
   Future<Map<String, dynamic>> cancelAllSearches() {

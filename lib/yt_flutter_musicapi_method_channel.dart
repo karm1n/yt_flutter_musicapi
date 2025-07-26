@@ -12,8 +12,6 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
       const EventChannel('yt_flutter_musicapi/relatedSongsStream');
   final EventChannel _artistEventChannel =
       const EventChannel('yt_flutter_musicapi/artistSongsStream');
-  final EventChannel _detailsEventChannel =
-      const EventChannel('yt_flutter_musicapi/songDetailsStream');
 
   @override
   Future<Map<String, dynamic>> initialize({
@@ -185,51 +183,42 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
     }).map((event) => Map<String, dynamic>.from(event));
   }
 
+  // @override
+  // Stream<Map<String, dynamic>> streamBatchSongs({
+  //   required List<Map<String, dynamic>> songs,
+  //   int batchSize = 30,
+  //   required String thumbQuality,
+  //   required String audioQuality,
+  // }) {
+  //   _methodChannel.invokeMethod('startStreamingBatch', {
+  //     'songs': songs,
+  //     'batchSize': batchSize,
+  //     'thumbQuality': thumbQuality,
+  //     'audioQuality': audioQuality,
+  //   });
+
+  //   return _batchEventChannel.receiveBroadcastStream({
+  //     'songs': songs,
+  //     'batchSize': batchSize,
+  //     'thumbQuality': thumbQuality,
+  //     'audioQuality': audioQuality,
+  //   }).map((event) => Map<String, dynamic>.from(event));
+  // }
+
   @override
-  Future<Map<String, dynamic>> getSongDetails({
-    required List<Map<String, String>> songs,
-    String mode = "batch",
-    String thumbQuality = "VERY_HIGH",
-    String audioQuality = "HIGH",
-    bool includeAudioUrl = true,
-    bool includeAlbumArt = true,
+  Future<Map<String, dynamic>> getAudioUrlFlexible({
+    String? title,
+    String? artist,
+    String? videoId,
+    String audioQuality = 'HIGH',
   }) async {
-    final result = await _methodChannel.invokeMethod('getSongDetails', {
-      'songs': songs,
-      'mode': mode,
-      'thumbQuality': thumbQuality,
+    final result = await _methodChannel.invokeMethod('getAudioUrlFlexible', {
+      'title': title,
+      'artist': artist,
+      'videoId': videoId,
       'audioQuality': audioQuality,
-      'includeAudioUrl': includeAudioUrl,
-      'includeAlbumArt': includeAlbumArt,
     });
     return Map<String, dynamic>.from(result);
-  }
-
-  @override
-  Stream<Map<String, dynamic>> streamSongDetails({
-    required List<Map<String, dynamic>> songs,
-    required String thumbQuality,
-    required String audioQuality,
-    required bool includeAudioUrl,
-    required bool includeAlbumArt,
-  }) {
-    // Invoke the method to start streaming
-    _methodChannel.invokeMethod('startStreamingDetails', {
-      'songs': songs,
-      'thumbQuality': thumbQuality,
-      'audioQuality': audioQuality,
-      'includeAudioUrl': includeAudioUrl,
-      'includeAlbumArt': includeAlbumArt,
-    });
-
-    // Return the event stream
-    return _detailsEventChannel.receiveBroadcastStream({
-      'songs': songs,
-      'thumbQuality': thumbQuality,
-      'audioQuality': audioQuality,
-      'includeAudioUrl': includeAudioUrl,
-      'includeAlbumArt': includeAlbumArt,
-    }).map((event) => Map<String, dynamic>.from(event));
   }
 
   @override
