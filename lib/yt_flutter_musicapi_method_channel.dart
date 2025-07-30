@@ -12,7 +12,14 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
       const EventChannel('yt_flutter_musicapi/relatedSongsStream');
   final EventChannel _artistEventChannel =
       const EventChannel('yt_flutter_musicapi/artistSongsStream');
-
+  final EventChannel _radioEventChannel =
+      const EventChannel('yt_flutter_musicapi/radioStream');
+  final EventChannel _artistAlbumsEventChannel =
+      const EventChannel('yt_flutter_musicapi/artistAlbumsStream');
+  final EventChannel _artistSinglesEventChannel =
+      const EventChannel('yt_flutter_musicapi/artistSinglesStream');
+  final EventChannel _chartsStreamChannel =
+      EventChannel('yt_flutter_musicapi/chartsStream');
   @override
   Future<Map<String, dynamic>> initialize({
     String? proxy,
@@ -51,6 +58,36 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
         'error': e.message,
         'code': e.code,
       };
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> getCharts({
+    required String country,
+    required int limit,
+    required String thumbQuality,
+    required String audioQuality,
+    required bool includeAudioUrl,
+    required bool includeAlbumArt,
+  }) async {
+    try {
+      final result = await _methodChannel
+          .invokeMethod<Map<Object?, Object?>>('getCharts', {
+        'country': country,
+        'limit': limit,
+        'thumbQuality': thumbQuality,
+        'audioQuality': audioQuality,
+        'includeAudioUrl': includeAudioUrl,
+        'includeAlbumArt': includeAlbumArt,
+      });
+
+      return Map<String, dynamic>.from(result ?? {});
+    } on PlatformException catch (e) {
+      throw PlatformException(
+        code: e.code,
+        message: 'Failed to get charts: ${e.message}',
+        details: e.details,
+      );
     }
   }
 
@@ -176,6 +213,134 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
     return _artistEventChannel.receiveBroadcastStream({
       'artistName': artistName,
       'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    }).map((event) => Map<String, dynamic>.from(event));
+  }
+
+  @override
+  Stream<Map<String, dynamic>> streamCharts({
+    required String country,
+    required int limit,
+    required String thumbQuality,
+    required String audioQuality,
+    required bool includeAudioUrl,
+    required bool includeAlbumArt,
+  }) {
+    // First, trigger the streaming
+    _methodChannel.invokeMethod('startStreamingCharts', {
+      'country': country,
+      'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+
+    // Return the event stream
+    return _chartsStreamChannel.receiveBroadcastStream({
+      'country': country,
+      'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    }).cast<Map<String, dynamic>>();
+  }
+
+  @override
+  Stream<Map<String, dynamic>> streamRadio({
+    required String videoId,
+    int limit = 50,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    _methodChannel.invokeMethod('startStreamingRadio', {
+      'videoId': videoId,
+      'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+
+    return _radioEventChannel.receiveBroadcastStream({
+      'videoId': videoId,
+      'limit': limit,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    }).map((event) => Map<String, dynamic>.from(event));
+  }
+
+  @override
+  Stream<Map<String, dynamic>> streamArtistAlbums({
+    required String artistName,
+    int maxAlbums = 5,
+    int maxSongsPerAlbum = 10,
+    int maxWorkers = 5,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    // Start the streaming process
+    _methodChannel.invokeMethod('startStreamingArtistAlbums', {
+      'artistName': artistName,
+      'maxAlbums': maxAlbums,
+      'maxSongsPerAlbum': maxSongsPerAlbum,
+      'maxWorkers': maxWorkers,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+
+    return _artistAlbumsEventChannel.receiveBroadcastStream({
+      'artistName': artistName,
+      'maxAlbums': maxAlbums,
+      'maxSongsPerAlbum': maxSongsPerAlbum,
+      'maxWorkers': maxWorkers,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    }).map((event) => Map<String, dynamic>.from(event));
+  }
+
+  @override
+  Stream<Map<String, dynamic>> streamArtistSingles({
+    required String artistName,
+    int maxSingles = 5,
+    int maxSongsPerSingle = 10,
+    int maxWorkers = 5,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    // Start the streaming process
+    _methodChannel.invokeMethod('startStreamingArtistSingles', {
+      'artistName': artistName,
+      'maxSingles': maxSingles,
+      'maxSongsPerSingle': maxSongsPerSingle,
+      'maxWorkers': maxWorkers,
+      'thumbQuality': thumbQuality,
+      'audioQuality': audioQuality,
+      'includeAudioUrl': includeAudioUrl,
+      'includeAlbumArt': includeAlbumArt,
+    });
+
+    return _artistSinglesEventChannel.receiveBroadcastStream({
+      'artistName': artistName,
+      'maxSingles': maxSingles,
+      'maxSongsPerSingle': maxSongsPerSingle,
+      'maxWorkers': maxWorkers,
       'thumbQuality': thumbQuality,
       'audioQuality': audioQuality,
       'includeAudioUrl': includeAudioUrl,

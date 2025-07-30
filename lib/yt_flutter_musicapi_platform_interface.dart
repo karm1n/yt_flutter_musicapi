@@ -23,7 +23,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
 
   Future<Map<String, dynamic>> searchMusic({
     required String query,
-    int limit = 10,
+    int limit = 25,
     String thumbQuality = 'VERY_HIGH',
     String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
@@ -34,7 +34,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
 
   Stream<Map<String, dynamic>> streamSearchResults({
     required String query,
-    int limit = 35,
+    int limit = 50,
     String thumbQuality = 'VERY_HIGH',
     String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
@@ -46,7 +46,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
   Future<Map<String, dynamic>> getRelatedSongs({
     required String songName,
     required String artistName,
-    int limit = 10,
+    int limit = 25,
     String thumbQuality = 'VERY_HIGH',
     String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
@@ -55,10 +55,22 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     throw UnimplementedError('getRelatedSongs() has not been implemented.');
   }
 
+  /// Get charts data as a batch operation
+  Future<Map<String, dynamic>> getCharts({
+    required String country,
+    required int limit,
+    required String thumbQuality,
+    required String audioQuality,
+    required bool includeAudioUrl,
+    required bool includeAlbumArt,
+  }) {
+    throw UnimplementedError('getCharts() has not been implemented.');
+  }
+
   Stream<Map<String, dynamic>> streamRelatedSongs({
     required String songName,
     required String artistName,
-    int limit = 65,
+    int limit = 100,
     String thumbQuality = 'VERY_HIGH',
     String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
@@ -69,7 +81,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
 
   Future<Map<String, dynamic>> getArtistSongs({
     required String artistName,
-    int limit = 10,
+    int limit = 25,
     String thumbQuality = 'VERY_HIGH',
     String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
@@ -80,7 +92,7 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
 
   Stream<Map<String, dynamic>> streamArtistSongs({
     required String artistName,
-    int limit = 45,
+    int limit = 80,
     String thumbQuality = 'VERY_HIGH',
     String audioQuality = 'HIGH',
     bool includeAudioUrl = true,
@@ -89,11 +101,60 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     throw UnimplementedError('streamArtistSongs() has not been implemented.');
   }
 
+  /// Stream charts data for a specific country
+  Stream<Map<String, dynamic>> streamCharts({
+    required String country,
+    required int limit,
+    required String thumbQuality,
+    required String audioQuality,
+    required bool includeAudioUrl,
+    required bool includeAlbumArt,
+  }) {
+    throw UnimplementedError('streamCharts() has not been implemented.');
+  }
+
   Future<Map<String, dynamic>> fetchLyrics({
     required String songName,
     required String artistName,
   }) {
     throw UnimplementedError('fetchLyrics() has not been implemented.');
+  }
+
+  Stream<Map<String, dynamic>> streamRadio({
+    required String videoId,
+    int limit = 100,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    throw UnimplementedError('streamRadio() has not been implemented.');
+  }
+
+  Stream<Map<String, dynamic>> streamArtistAlbums({
+    required String artistName,
+    int maxAlbums = 5,
+    int maxSongsPerAlbum = 10,
+    int maxWorkers = 5,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    throw UnimplementedError('streamArtistAlbums() has not been implemented.');
+  }
+
+  Stream<Map<String, dynamic>> streamArtistSingles({
+    required String artistName,
+    int maxSingles = 5,
+    int maxSongsPerSingle = 10,
+    int maxWorkers = 5,
+    String thumbQuality = 'VERY_HIGH',
+    String audioQuality = 'HIGH',
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    throw UnimplementedError('streamArtistSingles() has not been implemented.');
   }
 
   /// Get audio URL using flexible parameters

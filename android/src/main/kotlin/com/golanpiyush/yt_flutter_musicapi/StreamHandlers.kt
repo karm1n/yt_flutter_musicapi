@@ -290,7 +290,7 @@ class RelatedSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : E
 
                 plugin.searchManager.cancelType(SEARCH_TYPE)
                 
-                val limit = args["limit"] as? Int ?: 65
+                val limit = args["limit"] as? Int ?: 100
                 val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
                 val audioQuality = args["audioQuality"] as? String ?: "HIGH"
                 val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
@@ -506,7 +506,7 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
                 val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("artistName required")
                 searchId = "artist_${artistName.hashCode()}_${System.currentTimeMillis()}"
 
-                val limit = args["limit"] as? Int ?: 25
+                val limit = args["limit"] as? Int ?: 80
                 val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
                 val audioQuality = args["audioQuality"] as? String ?: "HIGH"
                 val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
@@ -687,6 +687,969 @@ class ArtistSongsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : Ev
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
+class RadioStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+
+    companion object {
+        const val SEARCH_TYPE = "RADIO"
+    }
+
+    private var eventSink: EventChannel.EventSink? = null
+    private var searchId: String? = null
+    private var job: Job? = null
+    private var pythonExecutor: ExecutorService? = null
+    private val executorLock = Object()
+
+    private fun getOrCreateExecutor(): ExecutorService {
+        return synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown && !it.isTerminated } ?: run {
+                Executors.newSingleThreadExecutor { r ->
+                    Thread(r, "PythonExecutor-Radio").apply { isDaemon = true }
+                }.also { pythonExecutor = it }
+            }
+        }
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+        val args = arguments as? Map<*, *> ?: run {
+            events?.error("INVALID_ARGUMENTS", "Arguments must be a map", null)
+            return
+        }
+
+        job = plugin.coroutineScope.launch {
+            try {
+                Log.d("YTMusicAPI", "RadioStreamHandler: Starting radio execution")
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
+                val videoId = args["videoId"] as? String ?: throw IllegalArgumentException("videoId required")
+                searchId = "radio_${videoId.hashCode()}_${System.currentTimeMillis()}"
+
+                val limit = args["limit"] as? Int ?: 100
+                val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+
+                plugin.searchManager.cancelType(SEARCH_TYPE)
+
+                val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher unavailable")
+
+                Log.d("YTMusicAPI", "RadioStreamHandler: Creating generator for videoId: $videoId")
+
+                val generator = suspendCancellableCoroutine<PyObject> { continuation ->
+                    val executor = getOrCreateExecutor()
+                    try {
+                        executor.execute {
+                            try {
+                                val result = searcher.callAttr(
+                                    "get_radio",
+                                    videoId,
+                                    limit,
+                                    thumbQuality,
+                                    audioQuality,
+                                    includeAudioUrl,
+                                    includeAlbumArt
+                                )
+                                continuation.resume(result)
+                            } catch (e: Exception) {
+                                continuation.resumeWithException(e)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        continuation.resumeWithException(e)
+                    }
+
+                    continuation.invokeOnCancellation {
+                        Log.d("YTMusicAPI", "RadioStreamHandler: Generator creation cancelled")
+                    }
+                }
+
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
+
+                Log.d("YTMusicAPI", "RadioStreamHandler: Starting iteration")
+                processRadioResults(generator, events, limit)
+
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
+                }
+
+            } catch (e: TimeoutCancellationException) {
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Radio request timed out", null)
+                    }
+                }
+            } catch (e: CancellationException) {
+                Log.d("YTMusicAPI", "RadioStreamHandler: Search cancelled")
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "RadioStreamHandler: Stream error", e)
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
+            } finally {
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    }
+                }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    eventSink?.endOfStream()
+                }
+            }
+        }
+    }
+
+    private suspend fun processRadioResults(generator: PyObject, events: EventChannel.EventSink?, limit: Int) {
+        var itemCount = 0
+        val cancelled = AtomicBoolean(false)
+        val iterator = generator.callAttr("__iter__")
+
+        while (
+            plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) &&
+            itemCount < limit &&
+            !cancelled.get()
+        ) {
+            try {
+                Log.d("YTMusicAPI", "RadioStreamHandler: Getting radio track $itemCount")
+
+                val item = withTimeoutOrNull(20000L) {
+                    suspendCancellableCoroutine<PyObject?> { continuation ->
+                        val executor = getOrCreateExecutor()
+                        try {
+                            executor.execute {
+                                try {
+                                    val result = iterator.callAttr("__next__")
+                                    continuation.resume(result)
+                                } catch (e: Exception) {
+                                    if (e.message?.contains("StopIteration") == true) {
+                                        continuation.resume(null)
+                                    } else {
+                                        continuation.resumeWithException(e)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            continuation.resumeWithException(e)
+                        }
+
+                        continuation.invokeOnCancellation {
+                            cancelled.set(true)
+                        }
+                    }
+                }
+
+                if (item == null || item.isNone) {
+                    Log.d("YTMusicAPI", "RadioStreamHandler: No more radio tracks")
+                    break
+                }
+
+                val trackData = plugin.convertPythonDictToMap(item)
+                Log.d("YTMusicAPI", "RadioStreamHandler: Processing radio track: ${trackData["title"]}")
+
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.success(
+                            mapOf(
+                                "title" to (trackData["title"]?.toString() ?: "Unknown"),
+                                "artists" to (trackData["artists"]?.toString() ?: "Unknown"),
+                                "videoId" to (trackData["videoId"]?.toString() ?: ""),
+                                "duration" to (trackData["duration"]?.toString() ?: ""),
+                                "albumArt" to (trackData["albumArt"]?.toString() ?: ""),
+                                "audioUrl" to (trackData["audioUrl"]?.toString() ?: ""),
+                                "artistName" to (trackData["artist_name"]?.toString() ?: "Unknown"),
+                                "year" to (trackData["year"]?.toString() ?: "")
+                            )
+                        )
+                    } else {
+                        Log.d("YTMusicAPI", "⚠️ Skipped radio result for stale search: $searchId")
+                    }
+                }
+
+                itemCount++
+                Log.d("YTMusicAPI", "RadioStreamHandler: Processed $itemCount radio tracks")
+
+                yield()
+
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "RadioStreamHandler: Error at radio track $itemCount (${e.message})", e)
+                if (itemCount == 0) throw e
+                continue
+            }
+        }
+
+        Log.d("YTMusicAPI", "RadioStreamHandler: Finished processing $itemCount radio tracks")
+    }
+
+    override fun onCancel(arguments: Any?) {
+        Log.d("YTMusicAPI", "RadioStreamHandler: onCancel called")
+        job?.cancel()
+        searchId?.let {
+            if (plugin.searchManager.has(it)) {
+                plugin.searchManager.cancelSearch(it)
+            } else {
+                Log.d("YTMusicAPI", "Nothing to cancel for $it")
+            }
+        }
+        eventSink = null
+
+        synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown }?.shutdown()
+            pythonExecutor = null
+        }
+    }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class ChartsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+
+    companion object {
+        const val SEARCH_TYPE = "charts"
+    }
+
+    private var eventSink: EventChannel.EventSink? = null
+    private var searchId: String? = null
+    private var job: Job? = null
+    private var pythonExecutor: ExecutorService? = null
+    private val executorLock = Object()
+
+    private fun getOrCreateExecutor(): ExecutorService {
+        return synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown && !it.isTerminated } ?: run {
+                Executors.newSingleThreadExecutor { r ->
+                    Thread(r, "PythonExecutor-Charts").apply { isDaemon = true }
+                }.also { pythonExecutor = it }
+            }
+        }
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+        val args = arguments as? Map<*, *> ?: run {
+            events?.error("INVALID_ARGUMENTS", "Arguments must be a map", null)
+            return
+        }
+
+        job = plugin.coroutineScope.launch {
+            try {
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Starting charts execution")
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
+                val country = args["country"] as? String ?: "ZZ"
+                searchId = "charts_${country.hashCode()}_${System.currentTimeMillis()}"
+
+                val limit = args["limit"] as? Int ?: 50
+                val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+
+                plugin.searchManager.cancelType(SEARCH_TYPE)
+
+                val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher unavailable")
+
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Creating generator for country: $country")
+
+                val generator = suspendCancellableCoroutine<PyObject> { continuation ->
+                    val executor = getOrCreateExecutor()
+                    try {
+                        executor.execute {
+                            try {
+                                val result = searcher.callAttr(
+                                    "get_charts",
+                                    country,
+                                    limit,
+                                    thumbQuality,
+                                    audioQuality,
+                                    includeAudioUrl,
+                                    includeAlbumArt
+                                )
+                                continuation.resume(result)
+                            } catch (e: Exception) {
+                                continuation.resumeWithException(e)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        continuation.resumeWithException(e)
+                    }
+
+                    continuation.invokeOnCancellation {
+                        Log.d("YTMusicAPI", "ChartsStreamHandler: Generator creation cancelled")
+                    }
+                }
+
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
+
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Starting iteration")
+                processChartsResults(generator, events, limit, country)
+
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
+                }
+
+            } catch (e: TimeoutCancellationException) {
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Charts request timed out", null)
+                    }
+                }
+            } catch (e: CancellationException) {
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Search cancelled")
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "ChartsStreamHandler: Stream error", e)
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
+            } finally {
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    }
+                }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    eventSink?.endOfStream()
+                }
+            }
+        }
+    }
+
+    private suspend fun processChartsResults(generator: PyObject, events: EventChannel.EventSink?, limit: Int, country: String) {
+        var itemCount = 0
+        val cancelled = AtomicBoolean(false)
+        val iterator = generator.callAttr("__iter__")
+
+        while (
+            plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) &&
+            itemCount < limit &&
+            !cancelled.get()
+        ) {
+            try {
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Getting item $itemCount")
+
+                val item = withTimeoutOrNull(20000L) {
+                    suspendCancellableCoroutine<PyObject?> { continuation ->
+                        val executor = getOrCreateExecutor()
+                        try {
+                            executor.execute {
+                                try {
+                                    val result = iterator.callAttr("__next__")
+                                    continuation.resume(result)
+                                } catch (e: Exception) {
+                                    if (e.message?.contains("StopIteration") == true) {
+                                        continuation.resume(null)
+                                    } else {
+                                        continuation.resumeWithException(e)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            continuation.resumeWithException(e)
+                        }
+
+                        continuation.invokeOnCancellation {
+                            cancelled.set(true)
+                        }
+                    }
+                }
+
+                if (item == null || item.isNone) {
+                    Log.d("YTMusicAPI", "ChartsStreamHandler: No more items")
+                    break
+                }
+
+                val chartData = plugin.convertPythonDictToMap(item)
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Processing: ${chartData["title"]} (${chartData["chart_type"]})")
+
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.success(
+                            mapOf(
+                                "title" to (chartData["title"]?.toString() ?: "Unknown"),
+                                "artists" to (chartData["artists"]?.toString() ?: "Unknown"),
+                                "videoId" to (chartData["videoId"]?.toString() ?: ""),
+                                "duration" to (chartData["duration"]?.toString() ?: ""),
+                                "albumArt" to (chartData["albumArt"]?.toString() ?: ""),
+                                "audioUrl" to (chartData["audioUrl"]?.toString() ?: ""),
+                                "country" to country,
+                                "chartType" to (chartData["chart_type"]?.toString() ?: "unknown"),
+                                "rank" to (chartData["rank"]?.toString() ?: ""),
+                                "trend" to (chartData["trend"]?.toString() ?: "neutral"),
+                                "views" to (chartData["views"]?.toString() ?: ""),
+                                "isExplicit" to (chartData["isExplicit"] as? Boolean ?: false),
+                                "playlistId" to (chartData["playlistId"]?.toString() ?: ""),
+                                "album" to (chartData["album"] ?: mapOf<String, Any>())
+                            )
+                        )
+                    } else {
+                        Log.d("YTMusicAPI", "⚠️ Skipped result for stale search: $searchId")
+                    }
+                }
+
+                itemCount++
+                Log.d("YTMusicAPI", "ChartsStreamHandler: Processed $itemCount items")
+
+                yield()
+
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "ChartsStreamHandler: Error at item $itemCount (${e.message})", e)
+                if (itemCount == 0) throw e
+                continue
+            }
+        }
+
+        Log.d("YTMusicAPI", "ChartsStreamHandler: Finished processing $itemCount items")
+    }
+
+    override fun onCancel(arguments: Any?) {
+        Log.d("YTMusicAPI", "ChartsStreamHandler: onCancel called")
+        job?.cancel()
+        searchId?.let {
+            if (plugin.searchManager.has(it)) {
+                plugin.searchManager.cancelSearch(it)
+            } else {
+                Log.d("YTMusicAPI", "Nothing to cancel for $it")
+            }
+        }
+        eventSink = null
+
+        synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown }?.shutdown()
+            pythonExecutor = null
+        }
+    }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class ArtistAlbumsStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+
+    companion object {
+        const val SEARCH_TYPE = "ARTIST_ALBUMS"
+    }
+
+    private var eventSink: EventChannel.EventSink? = null
+    private var searchId: String? = null
+    private var job: Job? = null
+    private var pythonExecutor: ExecutorService? = null
+    private val executorLock = Object()
+
+    private fun getOrCreateExecutor(): ExecutorService {
+        return synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown && !it.isTerminated } ?: run {
+                Executors.newSingleThreadExecutor { r ->
+                    Thread(r, "PythonExecutor-ArtistAlbums").apply { isDaemon = true }
+                }.also { pythonExecutor = it }
+            }
+        }
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+        val args = arguments as? Map<*, *> ?: run {
+            events?.error("INVALID_ARGUMENTS", "Arguments must be a map", null)
+            return
+        }
+
+        job = plugin.coroutineScope.launch {
+            try {
+                Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Starting artist albums execution")
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
+                val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("artistName required")
+                searchId = "artist_albums_${artistName.hashCode()}_${System.currentTimeMillis()}"
+
+                // Updated parameters to match new Python implementation
+                val maxAlbums = args["maxAlbums"] as? Int ?: 5
+                val maxSongsPerAlbum = args["maxSongsPerAlbum"] as? Int ?: 10
+                val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+                val maxWorkers = args["maxWorkers"] as? Int ?: 5
+
+                plugin.searchManager.cancelType(SEARCH_TYPE)
+
+                val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher unavailable")
+
+                Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Creating generator for: $artistName (maxAlbums=$maxAlbums, maxSongs=$maxSongsPerAlbum, workers=$maxWorkers)")
+
+                val generator = suspendCancellableCoroutine<PyObject> { continuation ->
+                    val executor = getOrCreateExecutor()
+                    try {
+                        executor.execute {
+                            try {
+                                val result = searcher.callAttr(
+                                    "get_artist_albums",
+                                    artistName,
+                                    maxAlbums,
+                                    maxSongsPerAlbum,
+                                    thumbQuality,
+                                    audioQuality,
+                                    includeAudioUrl,
+                                    includeAlbumArt,
+                                    maxWorkers
+                                )
+                                continuation.resume(result)
+                            } catch (e: Exception) {
+                                continuation.resumeWithException(e)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        continuation.resumeWithException(e)
+                    }
+
+                    continuation.invokeOnCancellation {
+                        Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Generator creation cancelled")
+                    }
+                }
+
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
+
+                Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Starting iteration")
+                processAlbumsResults(generator, events, maxAlbums, artistName)
+
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
+                }
+
+            } catch (e: TimeoutCancellationException) {
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Artist albums request timed out", null)
+                    }
+                }
+            } catch (e: CancellationException) {
+                Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Search cancelled")
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "ArtistAlbumsStreamHandler: Stream error", e)
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
+            } finally {
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    }
+                }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    eventSink?.endOfStream()
+                }
+            }
+        }
+    }
+
+    private suspend fun processAlbumsResults(generator: PyObject, events: EventChannel.EventSink?, maxAlbums: Int, artistName: String) {
+        var albumCount = 0
+        val cancelled = AtomicBoolean(false)
+        val iterator = generator.callAttr("__iter__")
+        val albumsWithTracks = mutableMapOf<String, MutableMap<String, Any>>()
+
+        while (
+            plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) &&
+            albumCount < maxAlbums &&
+            !cancelled.get()
+        ) {
+            try {
+                Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Getting next item")
+
+                val item = withTimeoutOrNull(45000L) { // Extended timeout for worker processing
+                    suspendCancellableCoroutine<PyObject?> { continuation ->
+                        val executor = getOrCreateExecutor()
+                        try {
+                            executor.execute {
+                                try {
+                                    val result = iterator.callAttr("__next__")
+                                    continuation.resume(result)
+                                } catch (e: Exception) {
+                                    if (e.message?.contains("StopIteration") == true) {
+                                        continuation.resume(null)
+                                    } else {
+                                        continuation.resumeWithException(e)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            continuation.resumeWithException(e)
+                        }
+
+                        continuation.invokeOnCancellation {
+                            cancelled.set(true)
+                        }
+                    }
+                }
+
+                if (item == null || item.isNone) {
+                    Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: No more items")
+                    break
+                }
+
+                val albumData = plugin.convertPythonDictToMap(item)
+                val albumTitle = albumData["title"]?.toString() ?: "Unknown Album"
+                
+                Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Processing item: $albumTitle")
+
+                // Check if this is an album info (empty tracks) or album with tracks
+                val tracks = albumData["tracks"] as? List<*> ?: emptyList<Any>()
+                
+                if (tracks.isEmpty()) {
+                    // This is album info - store it and send immediately
+                    val albumInfo = mutableMapOf(
+                        "type" to "album",
+                        "title" to albumTitle,
+                        "artist" to artistName,
+                        "year" to (albumData["year"]?.toString() ?: ""),
+                        "albumArt" to (albumData["albumArt"]?.toString() ?: ""),
+                        "tracks" to mutableListOf<Map<String, Any>>()
+                    )
+                    
+                    albumsWithTracks[albumTitle] = albumInfo
+                    albumCount++
+                    
+                    withContext(Dispatchers.Main) {
+                        if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                            events?.success(albumInfo.toMap())
+                            Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Sent album info for: $albumTitle")
+                        }
+                    }
+                } else {
+                    // This is an updated album with tracks - update the stored album
+                    val tracksData = tracks.mapNotNull { track ->
+                        if (track is Map<*, *>) {
+                            mapOf(
+                                "title" to (track["title"]?.toString() ?: "Unknown"),
+                                "artists" to (track["artists"]?.toString() ?: "Unknown"),
+                                "videoId" to (track["videoId"]?.toString() ?: ""),
+                                "duration" to (track["duration"]?.toString() ?: ""),
+                                "albumArt" to (track["albumArt"]?.toString() ?: ""),
+                                "audioUrl" to (track["audioUrl"]?.toString() ?: ""),
+                                "artistName" to (track["artist_name"]?.toString() ?: artistName),
+                                "year" to (track["year"]?.toString() ?: "")
+                            )
+                        } else null
+                    }
+
+                    // Update existing album with new tracks
+                    albumsWithTracks[albumTitle]?.let { storedAlbum ->
+                        val currentTracks = storedAlbum["tracks"] as? MutableList<Map<String, Any>> ?: mutableListOf()
+                        currentTracks.addAll(tracksData)
+                        storedAlbum["tracks"] = currentTracks // ensure it remains mutable
+
+                        withContext(Dispatchers.Main) {
+                            if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                                events?.success(storedAlbum.toMap())
+                                Log.d("YTMusicAPI", "Updated album $albumTitle with ${tracksData.size} tracks (total: ${currentTracks.size})")
+                            }
+                        }
+                    }
+
+                }
+
+                yield()
+
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "ArtistAlbumsStreamHandler: Error processing item (${e.message})", e)
+                if (albumCount == 0) throw e
+                continue
+            }
+        }
+
+        Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: Finished processing $albumCount albums")
+    }
+
+    override fun onCancel(arguments: Any?) {
+        Log.d("YTMusicAPI", "ArtistAlbumsStreamHandler: onCancel called")
+        job?.cancel()
+        searchId?.let {
+            if (plugin.searchManager.has(it)) {
+                plugin.searchManager.cancelSearch(it)
+            } else {
+                Log.d("YTMusicAPI", "Nothing to cancel for $it")
+            }
+        }
+        eventSink = null
+
+        synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown }?.shutdown()
+            pythonExecutor = null
+        }
+    }
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class ArtistSinglesStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
+
+    companion object {
+        const val SEARCH_TYPE = "ARTIST_SINGLES"
+    }
+
+    private var eventSink: EventChannel.EventSink? = null
+    private var searchId: String? = null
+    private var job: Job? = null
+    private var pythonExecutor: ExecutorService? = null
+    private val executorLock = Object()
+
+    private fun getOrCreateExecutor(): ExecutorService {
+        return synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown && !it.isTerminated } ?: run {
+                Executors.newSingleThreadExecutor { r ->
+                    Thread(r, "PythonExecutor-ArtistSingles").apply { isDaemon = true }
+                }.also { pythonExecutor = it }
+            }
+        }
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        eventSink = events
+        val args = arguments as? Map<*, *> ?: run {
+            events?.error("INVALID_ARGUMENTS", "Arguments must be a map", null)
+            return
+        }
+
+        job = plugin.coroutineScope.launch {
+            try {
+                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Starting artist singles execution")
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Listening on searchId = $searchId")
+
+                val artistName = args["artistName"] as? String ?: throw IllegalArgumentException("artistName required")
+                searchId = "artist_singles_${artistName.hashCode()}_${System.currentTimeMillis()}"
+
+                // Updated parameters to match new Python implementation
+                val maxSingles = args["maxSingles"] as? Int ?: 5
+                val maxSongsPerSingle = args["maxSongsPerSingle"] as? Int ?: 10
+                val thumbQuality = args["thumbQuality"] as? String ?: "VERY_HIGH"
+                val audioQuality = args["audioQuality"] as? String ?: "HIGH"
+                val includeAudioUrl = args["includeAudioUrl"] as? Boolean ?: true
+                val includeAlbumArt = args["includeAlbumArt"] as? Boolean ?: true
+                val maxWorkers = args["maxWorkers"] as? Int ?: 5
+
+                plugin.searchManager.cancelType(SEARCH_TYPE)
+
+                val searcher = plugin.getMusicSearcher() ?: throw IllegalStateException("Music searcher unavailable")
+
+                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Creating generator for: $artistName (maxSingles=$maxSingles, maxSongs=$maxSongsPerSingle, workers=$maxWorkers)")
+
+                val generator = suspendCancellableCoroutine<PyObject> { continuation ->
+                    val executor = getOrCreateExecutor()
+                    try {
+                        executor.execute {
+                            try {
+                                val result = searcher.callAttr(
+                                    "get_artist_singles_eps",
+                                    artistName,
+                                    maxSingles,
+                                    maxSongsPerSingle,
+                                    thumbQuality,
+                                    audioQuality,
+                                    includeAudioUrl,
+                                    includeAlbumArt,
+                                    maxWorkers
+                                )
+                                continuation.resume(result)
+                            } catch (e: Exception) {
+                                continuation.resumeWithException(e)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        continuation.resumeWithException(e)
+                    }
+
+                    continuation.invokeOnCancellation {
+                        Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Generator creation cancelled")
+                    }
+                }
+
+                plugin.searchManager.registerSearch(searchId!!, SEARCH_TYPE, generator, job!!)
+
+                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Starting iteration")
+                processSinglesResults(generator, events, maxSingles, artistName)
+
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.endOfStream()
+                    }
+                }
+
+            } catch (e: TimeoutCancellationException) {
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("TIMEOUT_ERROR", "Artist singles request timed out", null)
+                    }
+                }
+            } catch (e: CancellationException) {
+                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Search cancelled")
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "ArtistSinglesStreamHandler: Stream error", e)
+                withContext(Dispatchers.Main) {
+                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                        events?.error("STREAM_ERROR", e.message ?: "Unknown error", null)
+                    }
+                }
+            } finally {
+                searchId?.let {
+                    if (plugin.searchManager.has(it)) {
+                        plugin.searchManager.cancelSearch(it)
+                    }
+                }
+                Log.d("YTMusicAPI", "[$SEARCH_TYPE] Cleaning up searchId = $searchId (job=${job?.isCancelled})")
+
+                withContext(Dispatchers.Main.immediate) {
+                    eventSink?.endOfStream()
+                }
+            }
+        }
+    }
+
+    private suspend fun processSinglesResults(generator: PyObject, events: EventChannel.EventSink?, maxSingles: Int, artistName: String) {
+        var singleCount = 0
+        val cancelled = AtomicBoolean(false)
+        val iterator = generator.callAttr("__iter__")
+        val singlesWithTracks = mutableMapOf<String, MutableMap<String, Any>>()
+
+        while (
+            plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) &&
+            singleCount < maxSingles &&
+            !cancelled.get()
+        ) {
+            try {
+                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Getting next item")
+
+                val item = withTimeoutOrNull(45000L) { // Extended timeout for worker processing
+                    suspendCancellableCoroutine<PyObject?> { continuation ->
+                        val executor = getOrCreateExecutor()
+                        try {
+                            executor.execute {
+                                try {
+                                    val result = iterator.callAttr("__next__")
+                                    continuation.resume(result)
+                                } catch (e: Exception) {
+                                    if (e.message?.contains("StopIteration") == true) {
+                                        continuation.resume(null)
+                                    } else {
+                                        continuation.resumeWithException(e)
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            continuation.resumeWithException(e)
+                        }
+
+                        continuation.invokeOnCancellation {
+                            cancelled.set(true)
+                        }
+                    }
+                }
+
+                if (item == null || item.isNone) {
+                    Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: No more items")
+                    break
+                }
+
+                val singleData = plugin.convertPythonDictToMap(item)
+                val singleTitle = singleData["title"]?.toString() ?: "Unknown Single/EP"
+                
+                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Processing item: $singleTitle")
+
+                // Check if this is single info (empty tracks) or single with tracks
+                val tracks = singleData["tracks"] as? List<*> ?: emptyList<Any>()
+                
+                if (tracks.isEmpty()) {
+                    // This is single info - store it and send immediately
+                    val singleInfo = mutableMapOf(
+                        "type" to "single",
+                        "title" to singleTitle,
+                        "artist" to artistName,
+                        "year" to (singleData["year"]?.toString() ?: ""),
+                        "albumArt" to (singleData["albumArt"]?.toString() ?: ""),
+                        "tracks" to mutableListOf<Map<String, Any>>()
+                    )
+                    
+                    singlesWithTracks[singleTitle] = singleInfo
+                    singleCount++
+                    
+                    withContext(Dispatchers.Main) {
+                        if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                            events?.success(singleInfo.toMap())
+                            Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Sent single info for: $singleTitle")
+                        }
+                    }
+                } else {
+                    // This is an updated single with tracks - update the stored single
+                    val tracksData = tracks.mapNotNull { track ->
+                        if (track is Map<*, *>) {
+                            mapOf(
+                                "title" to (track["title"]?.toString() ?: "Unknown"),
+                                "artists" to (track["artists"]?.toString() ?: "Unknown"),
+                                "videoId" to (track["videoId"]?.toString() ?: ""),
+                                "duration" to (track["duration"]?.toString() ?: ""),
+                                "albumArt" to (track["albumArt"]?.toString() ?: ""),
+                                "audioUrl" to (track["audioUrl"]?.toString() ?: ""),
+                                "artistName" to (track["artist_name"]?.toString() ?: artistName),
+                                "year" to (track["year"]?.toString() ?: "")
+                            )
+                        } else null
+                    }
+
+                    // Update existing single with new tracks
+                    singlesWithTracks[singleTitle]?.let { storedSingle ->
+                        val currentTracks = storedSingle["tracks"] as MutableList<Map<String, Any>>
+                        currentTracks.addAll(tracksData)
+                        
+                        withContext(Dispatchers.Main) {
+                            if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                                events?.success(storedSingle.toMap())
+                                Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Updated single $singleTitle with ${tracksData.size} tracks (total: ${currentTracks.size})")
+                            }
+                        }
+                    }
+                }
+
+                yield()
+
+            } catch (e: Exception) {
+                Log.e("YTMusicAPI", "ArtistSinglesStreamHandler: Error processing item (${e.message})", e)
+                if (singleCount == 0) throw e
+                continue
+            }
+        }
+
+        Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: Finished processing $singleCount singles/EPs")
+    }
+
+    override fun onCancel(arguments: Any?) {
+        Log.d("YTMusicAPI", "ArtistSinglesStreamHandler: onCancel called")
+        job?.cancel()
+        searchId?.let {
+            if (plugin.searchManager.has(it)) {
+                plugin.searchManager.cancelSearch(it)
+            } else {
+                Log.d("YTMusicAPI", "Nothing to cancel for $it")
+            }
+        }
+        eventSink = null
+
+        synchronized(executorLock) {
+            pythonExecutor?.takeIf { !it.isShutdown }?.shutdown()
+            pythonExecutor = null
+        }
+    }
+}
 
 
 

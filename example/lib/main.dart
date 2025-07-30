@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:yt_flutter_musicapi/models/artistAlbums.dart';
 import 'package:yt_flutter_musicapi/models/relatedSongModel.dart';
 import 'package:yt_flutter_musicapi/models/artistsStreamModel.dart';
 import 'package:yt_flutter_musicapi/models/searchModel.dart';
@@ -67,6 +68,13 @@ class AppSettings {
   static ThumbnailQuality thumbnailQuality = ThumbnailQuality.veryHigh;
   static bool isDarkMode = true;
   static int batchSize = 4;
+  static int maxAlbums = 5;
+  static int maxSingles = 5;
+  static int maxSongsPerAlbum = 10;
+  static int maxSongsPerSingle = 10;
+  static String chartsCountry = 'ZZ'; // ZZ = Global, US = United States, etc.
+  static int chartsLimit = 50;
+  static int maxWorkers = 5;
   static String mode = 'auto'; // 'auto', 'batch', or 'stream'
   static String artistName = 'Ed Sheeran';
   static String testVideoId = '4NRXx6U8ABQ'; // Default video ID
@@ -75,7 +83,7 @@ class AppSettings {
     {'title': 'Bad Guy', 'artist': 'Billie Eilish'},
     {'title': 'Blinding Lights', 'artist': 'The Weeknd'},
   ];
-
+  static int get limitalbums => maxAlbums;
   static List<Map<String, String>> batchTestSongs = [
     {'title': 'Bohemian Rhapsody', 'artist': 'Queen'},
     {'title': 'Sweet Child O\' Mine', 'artist': 'Guns N\' Roses'},
@@ -352,6 +360,126 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
         });
       }
     });
+  }
+  // Add these methods to your _MusicApiTestPageState class
+
+  Future<void> _getCharts() async {
+    if (_isLoading || !_isInitialized) {
+      _addToCliOutput('❌ API not initialized or busy');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    _addToCliOutput(
+      '📊 Getting charts for country: ${AppSettings.chartsCountry}',
+    );
+    _addToCliOutput(
+      '📊 Settings: Limit=${AppSettings.chartsLimit}, Audio=${AppSettings.audioQuality.value}, '
+      'Thumb=${AppSettings.thumbnailQuality.value}, Mode=${AppSettings.mode}',
+    );
+
+    try {
+      if (AppSettings.mode == 'stream') {
+        await _streamCharts();
+      } else {
+        final response = await _api.getCharts(
+          country: AppSettings.chartsCountry,
+          limit: AppSettings.chartsLimit,
+          audioQuality: AppSettings.audioQuality,
+          thumbQuality: AppSettings.thumbnailQuality,
+          includeAudioUrl: true,
+          includeAlbumArt: true,
+        );
+
+        if (response.success && response.data != null) {
+          _addToCliOutput('✅ Charts retrieved successfully');
+          _addToCliOutput('📋 Found ${response.data!.length} chart items');
+
+          for (int i = 0; i < response.data!.length; i++) {
+            final item = response.data![i];
+            _addToCliOutput('🏆 Chart Position ${i + 1}:');
+            _addToCliOutput('   Title: ${item.title}');
+            _addToCliOutput('   Artists: ${item.artists}');
+            _addToCliOutput('   Duration: ${item.duration ?? 'N/A'}');
+            _addToCliOutput('   Video ID: ${item.videoId}');
+            _addToCliOutput('   Rank: ${item.rank ?? 'N/A'}');
+            _addToCliOutput(
+              '   Album Art: ${item.albumArt != null ? 'Available' : 'N/A'}',
+            );
+            _addToCliOutput(
+              '   Audio URL: ${item.audioUrl != null ? 'Available' : 'N/A'}',
+            );
+            _addToCliOutput('   ---');
+          }
+
+          _addToCliOutput('🎉 SUCCESS: Charts operation completed');
+        } else {
+          _addToCliOutput('❌ Failed to get charts');
+          _addToCliOutput('📋 Error: ${response.error ?? 'Unknown error'}');
+        }
+      }
+    } catch (e) {
+      _addToCliOutput('❌ Exception during charts fetch: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _streamCharts() async {
+    int received = 0;
+    final stopwatch = Stopwatch()..start();
+
+    _addToCliOutput(
+      '📡 Streaming charts for country: ${AppSettings.chartsCountry}',
+    );
+
+    try {
+      await for (final item in _api.streamCharts(
+        country: AppSettings.chartsCountry,
+        limit: AppSettings.chartsLimit,
+        audioQuality: AppSettings.audioQuality,
+        thumbQuality: AppSettings.thumbnailQuality,
+        includeAudioUrl: true,
+        includeAlbumArt: true,
+      )) {
+        received++;
+        _addToCliOutput(
+          '🏆 Streamed Chart Item $received in ${stopwatch.elapsedMilliseconds}ms:',
+        );
+        _addToCliOutput('   Title: ${item.title}');
+        _addToCliOutput('   Artists: ${item.artists}');
+        _addToCliOutput('   Duration: ${item.duration ?? 'N/A'}');
+        _addToCliOutput('   Video ID: ${item.videoId}');
+        _addToCliOutput('   Rank: ${item.rank ?? 'N/A'}');
+        _addToCliOutput(
+          '   Album Art: ${item.albumArt != null ? 'Available' : 'N/A'}',
+        );
+        _addToCliOutput(
+          '   Audio URL: ${item.audioUrl != null ? 'Available' : 'N/A'}',
+        );
+        _addToCliOutput('   ---');
+
+        if (received >= AppSettings.chartsLimit) {
+          _addToCliOutput(
+            '⏹️ Streaming limit reached (${AppSettings.chartsLimit})',
+          );
+          break;
+        }
+
+        stopwatch.reset();
+      }
+
+      _addToCliOutput(
+        '✅ Charts stream finished: $received item(s) in ${stopwatch.elapsedMilliseconds}ms',
+      );
+    } catch (e) {
+      _addToCliOutput('❌ Charts streaming error: $e');
+    }
   }
 
   Future<void> _testRelatedSongsCancellation() async {
@@ -998,6 +1126,361 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
     }
   }
 
+  // Add these methods to your existing _MusicApiTestPageState class
+
+  Future<void> _streamRadio() async {
+    if (_isLoading || !_isInitialized) {
+      _addToCliOutput('❌ API not initialized or busy');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    _addToCliOutput(
+      '📻 Starting radio stream for video ID: ${AppSettings.testVideoId}',
+    );
+    _addToCliOutput(
+      '📊 Settings: Limit=${AppSettings.limit}, Audio=${AppSettings.audioQuality.value}, Thumb=${AppSettings.thumbnailQuality.value}',
+    );
+
+    try {
+      int received = 0;
+      final stopwatch = Stopwatch()..start();
+
+      await for (final track in _api.streamRadio(
+        videoId: AppSettings.testVideoId,
+        limit: AppSettings.limit,
+        audioQuality: AppSettings.audioQuality,
+        thumbQuality: AppSettings.thumbnailQuality,
+        includeAudioUrl: true,
+        includeAlbumArt: true,
+      )) {
+        received++;
+        _addToCliOutput('\n🎧 RADIO TRACK $received:');
+        _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        _addToCliOutput('🎵 Title: ${track.title}');
+        _addToCliOutput('👤 Artist(s): ${track.artists}');
+        _addToCliOutput('🆔 Video ID: ${track.videoId}');
+        _addToCliOutput('⏱ Duration: ${track.duration ?? 'N/A'}');
+        _addToCliOutput('🖼 Album Art: ${track.albumArt ?? 'N/A'}');
+        if (track.audioUrl != null) {
+          _addToCliOutput('🔊 Audio URL: Available');
+        } else {
+          _addToCliOutput('🔊 Audio URL: Not found');
+        }
+        _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        if (received >= AppSettings.limit) {
+          _addToCliOutput('⏹️ Reached limit of ${AppSettings.limit} tracks');
+          break;
+        }
+      }
+
+      _addToCliOutput(
+        '\n✅ Radio stream finished: $received track(s) in ${stopwatch.elapsedMilliseconds}ms',
+      );
+    } catch (e) {
+      _addToCliOutput('❌ Radio stream error: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _streamArtistAlbums() async {
+    if (_isLoading || !_isInitialized) {
+      _addToCliOutput('❌ API not initialized or busy');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    _addToCliOutput('💿 Getting albums for artist: ${AppSettings.artistName}');
+    _addToCliOutput(
+      '📊 Settings: MaxAlbums=${AppSettings.maxAlbums}, MaxSongs=${AppSettings.maxSongsPerAlbum}, Workers=${AppSettings.maxWorkers}',
+    );
+    _addToCliOutput(
+      '🎛️ Quality: Audio=${AppSettings.audioQuality.value}, Thumb=${AppSettings.thumbnailQuality.value}',
+    );
+
+    try {
+      int received = 0;
+      final stopwatch = Stopwatch()..start();
+      final Map<String, int> albumTrackCounts = {}; // Track progress per album
+      final Set<String> completedAlbums = {}; // Track which albums are complete
+
+      await for (final album in _api.streamArtistAlbums(
+        artistName: AppSettings.artistName,
+        maxAlbums: AppSettings.maxAlbums,
+        maxSongsPerAlbum: AppSettings.maxSongsPerAlbum,
+        maxWorkers: AppSettings.maxWorkers,
+        audioQuality: AppSettings.audioQuality,
+        thumbQuality: AppSettings.thumbnailQuality,
+        includeAudioUrl: true,
+        includeAlbumArt: true,
+      )) {
+        final albumData = ArtistAlbum.fromMap(album as Map<String, dynamic>);
+        final albumTitle = albumData.title;
+
+        // Check if this is a new album or an update to existing album
+        final isNewAlbum = !albumTrackCounts.containsKey(albumTitle);
+        final previousTrackCount = albumTrackCounts[albumTitle] ?? 0;
+        final currentTrackCount = albumData.tracks.length;
+
+        albumTrackCounts[albumTitle] = currentTrackCount;
+
+        if (isNewAlbum) {
+          received++;
+          _addToCliOutput(
+            '\n📀 ALBUM $received: ${albumData.title.toUpperCase()}',
+          );
+          _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          _addToCliOutput('🎼 Type: ${albumData.type}');
+          _addToCliOutput('👤 Artist: ${albumData.artist}');
+          _addToCliOutput(
+            '📅 Year: ${albumData.year.isNotEmpty ? albumData.year : 'N/A'}',
+          );
+          _addToCliOutput(
+            '🖼 Album Art: ${albumData.albumArt.isNotEmpty ? 'Available' : 'N/A'}',
+          );
+
+          if (currentTrackCount == 0) {
+            _addToCliOutput('⏳ Loading tracks...');
+          } else {
+            _addToCliOutput('🔢 Tracks: ${currentTrackCount}');
+          }
+        } else if (currentTrackCount > previousTrackCount) {
+          // This is an update with more tracks
+          final newTracks = currentTrackCount - previousTrackCount;
+          _addToCliOutput(
+            '\n🔄 UPDATING ${albumTitle.toUpperCase()} (+$newTracks tracks, total: $currentTrackCount)',
+          );
+        }
+
+        // Display tracks if available
+        if (albumData.tracks.isNotEmpty) {
+          // Only show new tracks if this is an update
+          final tracksToShow = isNewAlbum
+              ? albumData.tracks
+              : albumData.tracks.skip(previousTrackCount).toList();
+
+          if (tracksToShow.isNotEmpty) {
+            if (isNewAlbum) {
+              _addToCliOutput('\n🎵 TRACKLIST:');
+            } else {
+              _addToCliOutput('🎵 NEW TRACKS:');
+            }
+
+            final startIndex = isNewAlbum ? 0 : previousTrackCount;
+            for (int i = 0; i < tracksToShow.length; i++) {
+              final track = tracksToShow[i];
+              final trackNumber = startIndex + i + 1;
+              _addToCliOutput('   $trackNumber. ${track.title}');
+              _addToCliOutput('      👤 Artist(s): ${track.artists}');
+              _addToCliOutput('      🆔 Video ID: ${track.videoId}');
+              _addToCliOutput('      ⏱ Duration: ${track.duration}');
+              _addToCliOutput(
+                '      🖼 Album Art: ${track.albumArt.isNotEmpty ? 'Available' : 'N/A'}',
+              );
+              _addToCliOutput(
+                '      🔊 Audio URL: ${track.audioUrl.isNotEmpty ? 'Available' : 'N/A'}',
+              );
+              if (i < tracksToShow.length - 1) {
+                _addToCliOutput('      ――――――――――――――――――――――――――――――――――');
+              }
+            }
+          }
+
+          // Mark as complete if we're not expecting more tracks
+          if (!completedAlbums.contains(albumTitle)) {
+            completedAlbums.add(albumTitle);
+            _addToCliOutput(
+              '✅ Album completed: ${albumData.tracks.length} tracks total',
+            );
+          }
+        } else if (isNewAlbum) {
+          _addToCliOutput('\n⏳ Tracks are being loaded by workers...');
+        }
+
+        _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        if (received >= AppSettings.maxAlbums) {
+          _addToCliOutput(
+            '⏹️ Reached limit of ${AppSettings.maxAlbums} albums',
+          );
+          break;
+        }
+      }
+
+      _addToCliOutput(
+        '\n✅ Albums stream finished: $received album(s) in ${stopwatch.elapsedMilliseconds}ms',
+      );
+      _addToCliOutput('📊 Final track counts:');
+      albumTrackCounts.forEach((album, count) {
+        _addToCliOutput('   • $album: $count tracks');
+      });
+    } catch (e, stackTrace) {
+      _addToCliOutput('❌ Albums stream error: $e');
+      debugPrint('Album stream error details: $stackTrace');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _streamArtistSingles() async {
+    if (_isLoading || !_isInitialized) {
+      _addToCliOutput('❌ API not initialized or busy');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    _addToCliOutput(
+      '🎵 Getting singles/EPs for artist: ${AppSettings.artistName}',
+    );
+    _addToCliOutput(
+      '📊 Settings: MaxSingles=${AppSettings.maxSingles}, MaxSongs=${AppSettings.maxSongsPerSingle}, Workers=${AppSettings.maxWorkers}',
+    );
+    _addToCliOutput(
+      '🎛️ Quality: Audio=${AppSettings.audioQuality.value}, Thumb=${AppSettings.thumbnailQuality.value}',
+    );
+
+    try {
+      int received = 0;
+      final stopwatch = Stopwatch()..start();
+      final Map<String, int> singleTrackCounts =
+          {}; // Track progress per single
+      final Set<String> completedSingles =
+          {}; // Track which singles are complete
+
+      await for (final single in _api.streamArtistSingles(
+        artistName: AppSettings.artistName,
+        maxSingles: AppSettings.maxSingles,
+        maxSongsPerSingle: AppSettings.maxSongsPerSingle,
+        maxWorkers: AppSettings.maxWorkers,
+        audioQuality: AppSettings.audioQuality,
+        thumbQuality: AppSettings.thumbnailQuality,
+        includeAudioUrl: true,
+        includeAlbumArt: true,
+      )) {
+        final singleData = ArtistAlbum.fromMap(single as Map<String, dynamic>);
+        final singleTitle = singleData.title;
+
+        // Check if this is a new single or an update to existing single
+        final isNewSingle = !singleTrackCounts.containsKey(singleTitle);
+        final previousTrackCount = singleTrackCounts[singleTitle] ?? 0;
+        final currentTrackCount = singleData.tracks.length;
+
+        singleTrackCounts[singleTitle] = currentTrackCount;
+
+        if (isNewSingle) {
+          received++;
+          _addToCliOutput(
+            '\n🎶 ${singleData.type.toUpperCase()} $received: ${singleData.title.toUpperCase()}',
+          );
+          _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          _addToCliOutput('👤 Artist: ${singleData.artist}');
+          _addToCliOutput(
+            '📅 Year: ${singleData.year.isNotEmpty ? singleData.year : 'N/A'}',
+          );
+          _addToCliOutput(
+            '🖼 Cover Art: ${singleData.albumArt.isNotEmpty ? 'Available' : 'N/A'}',
+          );
+
+          if (currentTrackCount == 0) {
+            _addToCliOutput('⏳ Loading tracks...');
+          } else {
+            _addToCliOutput('🔢 Tracks: ${currentTrackCount}');
+          }
+        } else if (currentTrackCount > previousTrackCount) {
+          // This is an update with more tracks
+          final newTracks = currentTrackCount - previousTrackCount;
+          _addToCliOutput(
+            '\n🔄 UPDATING ${singleTitle.toUpperCase()} (+$newTracks tracks, total: $currentTrackCount)',
+          );
+        }
+
+        // Display tracks if available
+        if (singleData.tracks.isNotEmpty) {
+          // Only show new tracks if this is an update
+          final tracksToShow = isNewSingle
+              ? singleData.tracks
+              : singleData.tracks.skip(previousTrackCount).toList();
+
+          if (tracksToShow.isNotEmpty) {
+            if (isNewSingle) {
+              _addToCliOutput('\n🎵 TRACKLIST:');
+            } else {
+              _addToCliOutput('🎵 NEW TRACKS:');
+            }
+
+            final startIndex = isNewSingle ? 0 : previousTrackCount;
+            for (int i = 0; i < tracksToShow.length; i++) {
+              final track = tracksToShow[i];
+              final trackNumber = startIndex + i + 1;
+              _addToCliOutput('   $trackNumber. ${track.title}');
+              _addToCliOutput('      👤 Artist(s): ${track.artists}');
+              _addToCliOutput('      🆔 Video ID: ${track.videoId}');
+              _addToCliOutput('      ⏱ Duration: ${track.duration}');
+              _addToCliOutput(
+                '      🖼 Artwork: ${track.albumArt.isNotEmpty ? 'Available' : 'N/A'}',
+              );
+              _addToCliOutput(
+                '      🔊 Audio URL: ${track.audioUrl.isNotEmpty ? 'Available' : 'N/A'}',
+              );
+              if (i < tracksToShow.length - 1) {
+                _addToCliOutput('      ――――――――――――――――――――――――――――――――――');
+              }
+            }
+          }
+
+          // Mark as complete if we're not expecting more tracks
+          if (!completedSingles.contains(singleTitle)) {
+            completedSingles.add(singleTitle);
+            _addToCliOutput(
+              '✅ ${singleData.type} completed: ${singleData.tracks.length} tracks total',
+            );
+          }
+        } else if (isNewSingle) {
+          _addToCliOutput('\n⏳ Tracks are being loaded by workers...');
+        }
+
+        _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+        if (received >= AppSettings.maxSingles) {
+          _addToCliOutput(
+            '⏹️ Reached limit of ${AppSettings.maxSingles} singles/EPs',
+          );
+          break;
+        }
+      }
+
+      _addToCliOutput(
+        '\n✅ Singles/EPs stream finished: $received item(s) in ${stopwatch.elapsedMilliseconds}ms',
+      );
+      _addToCliOutput('📊 Final track counts:');
+      singleTrackCounts.forEach((single, count) {
+        _addToCliOutput('   • $single: $count tracks');
+      });
+    } catch (e, stackTrace) {
+      _addToCliOutput('❌ Singles/EPs stream error: $e');
+      debugPrint('Singles stream error details: $stackTrace');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+
   Future<void> _testGetAudioUrlFlexible() async {
     setState(() {
       _isLoading = true;
@@ -1450,6 +1933,17 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                               foregroundColor: Colors.white,
                             ),
                           ),
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.trending_up),
+                            label: Text('Get Charts'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _getCharts,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
                           // In your button grid (where the other test buttons are)
                           // ElevatedButton.icon(
                           //   icon: Icon(Icons.batch_prediction),
@@ -1517,6 +2011,40 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                                 : _getArtistSongs,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.teal,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          // Add these buttons to your existing button grid
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.radio),
+                            label: Text('Stream Radio'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _streamRadio,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.indigo,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.album),
+                            label: Text('Artist Albums'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _streamArtistAlbums,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.deepPurple,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.music_note),
+                            label: Text('Artist Singles'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _streamArtistSingles,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.purpleAccent,
                               foregroundColor: Colors.white,
                             ),
                           ),
@@ -1597,6 +2125,9 @@ class _SettingsDialogState extends State<SettingsDialog> {
   late ThumbnailQuality _thumbnailQuality;
   late bool _isDarkMode;
   late String _mode;
+  late String _chartsCountry;
+  late int _chartsLimit;
+  late TextEditingController _chartsCountryController;
   late TextEditingController _artistController;
   late TextEditingController _videoIdController;
   late TextEditingController _songTitleController;
@@ -1619,6 +2150,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _songArtistController = TextEditingController(
       text: AppSettings.relatedSongArtist,
     );
+    _chartsCountry = AppSettings.chartsCountry;
+    _chartsLimit = AppSettings.chartsLimit;
+    _chartsCountryController = TextEditingController(
+      text: AppSettings.chartsCountry,
+    );
   }
 
   @override
@@ -1627,6 +2163,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
     _videoIdController.dispose();
     _songTitleController.dispose();
     _songArtistController.dispose();
+    _chartsCountryController.dispose();
     super.dispose();
   }
 
@@ -1668,6 +2205,34 @@ class _SettingsDialogState extends State<SettingsDialog> {
                   onChanged: (value) {
                     setState(() {
                       _batchSize = value.toInt();
+                    });
+                  },
+                ),
+              ),
+              TextField(
+                controller: _chartsCountryController,
+                decoration: InputDecoration(
+                  labelText: 'Charts Country Code',
+                  hintText: 'e.g., ZZ (Global), US, GB, IN',
+                  border: OutlineInputBorder(),
+                  helperText:
+                      'ZZ = Global, US = United States, GB = United Kingdom, IN = India',
+                ),
+                onChanged: (value) => _chartsCountry = value,
+              ),
+              SizedBox(height: 8),
+
+              // Charts Limit Setting
+              ListTile(
+                title: Text('Charts Limit: $_chartsLimit'),
+                subtitle: Slider(
+                  value: _chartsLimit.toDouble(),
+                  min: 10,
+                  max: 100,
+                  divisions: 18,
+                  onChanged: (value) {
+                    setState(() {
+                      _chartsLimit = value.toInt();
                     });
                   },
                 ),
@@ -1847,9 +2412,11 @@ class _SettingsDialogState extends State<SettingsDialog> {
             },
             child: Text('Cancel', style: TextStyle(color: Colors.white70)),
           ),
+
+          // Replace your existing save button onPressed method with this:
           ElevatedButton(
             onPressed: () {
-              // Save all settings
+              // Save all existing settings
               AppSettings.limit = _limit;
               AppSettings.batchSize = _batchSize;
               AppSettings.audioQuality = _audioQuality;
@@ -1860,6 +2427,13 @@ class _SettingsDialogState extends State<SettingsDialog> {
               AppSettings.testVideoId = _videoIdController.text.trim();
               AppSettings.relatedSongTitle = _songTitleController.text.trim();
               AppSettings.relatedSongArtist = _songArtistController.text.trim();
+
+              // Save new charts settings
+              AppSettings.chartsCountry =
+                  _chartsCountryController.text.trim().isEmpty
+                  ? 'ZZ'
+                  : _chartsCountryController.text.trim().toUpperCase();
+              AppSettings.chartsLimit = _chartsLimit;
 
               widget.onSettingsChanged();
               Navigator.of(context).pop();

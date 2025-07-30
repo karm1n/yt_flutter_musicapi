@@ -6,10 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [3.3.6]
+
+`ACTIVE & WORKING`
+
+### Added
+
+- Introduced `streamRadio` method to fetch dynamic radio playlists.  
+  This method provides real-time, frequently updated radio streams based on evolving algorithms.
+
+### Fixed
+
+- Updated internal `yt-dlp` dependency from `2025.06.30` to `2025.07.21`.  
+  Previous versions (`<=2025.06.30`) are no longer supported by this plugin and may result in audio extraction failures.
+
+> ⚠️ **Note**: Plugins using older `yt-dlp` versions will fail due to breaking changes in upstream audio extraction logic. Ensure your dependencies reflect the updated version for compatibility.
 
 [3.3.5]
 
-`Active & Working`
+`NOT Working`
 
 ## Added
 

@@ -2,8 +2,11 @@
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:yt_flutter_musicapi/models/artistAlbums.dart';
 import 'package:yt_flutter_musicapi/models/artistsStreamModel.dart';
 import 'package:yt_flutter_musicapi/models/audioUrlresultsModel.dart';
+import 'package:yt_flutter_musicapi/models/chatModel.dart';
+import 'package:yt_flutter_musicapi/models/getRadioModel.dart';
 import 'package:yt_flutter_musicapi/models/lyricsModel.dart';
 import 'package:yt_flutter_musicapi/models/relatedSongModel.dart';
 import 'package:yt_flutter_musicapi/models/searchModel.dart';
@@ -319,6 +322,35 @@ class YtFlutterMusicapi {
     });
   }
 
+  /// Get charts data as a batch operation
+  Future<YTMusicResponse<List<ChartItem>>> getCharts({
+    String country = 'ZZ',
+    int limit = 50,
+    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
+    AudioQuality audioQuality = AudioQuality.high,
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) async {
+    return _executeApiCall(() async {
+      final response = await YtFlutterMusicapiPlatform.instance.getCharts(
+        country: country,
+        limit: limit,
+        thumbQuality: thumbQuality.value,
+        audioQuality: audioQuality.value,
+        includeAudioUrl: includeAudioUrl,
+        includeAlbumArt: includeAlbumArt,
+      );
+
+      final responseMap = Map<String, dynamic>.from(response);
+      final dynamic data = responseMap['data'];
+      final List<dynamic> items = data is List ? data : [data];
+
+      return items.map((item) {
+        return ChartItem.fromMap(Map<String, dynamic>.from(item));
+      }).toList();
+    });
+  }
+
   Stream<ArtistSong> streamArtistSongs({
     required String artistName,
     int limit = 25,
@@ -337,6 +369,97 @@ class YtFlutterMusicapi {
           includeAlbumArt: includeAlbumArt,
         )
         .map((item) => ArtistSong.fromMap(item));
+  }
+
+  /// Stream radio tracks based on a video ID
+  Stream<RadioTrack> streamRadio({
+    required String videoId,
+    int limit = 50,
+    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
+    AudioQuality audioQuality = AudioQuality.high,
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    return YtFlutterMusicapiPlatform.instance
+        .streamRadio(
+          videoId: videoId,
+          limit: limit,
+          thumbQuality: thumbQuality.value,
+          audioQuality: audioQuality.value,
+          includeAudioUrl: includeAudioUrl,
+          includeAlbumArt: includeAlbumArt,
+        )
+        .map((item) => RadioTrack.fromMap(item));
+  }
+
+  /// Stream charts data for a specific country
+  Stream<ChartItem> streamCharts({
+    String country = 'ZZ', // ZZ = Global, US = United States, etc.
+    int limit = 50,
+    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
+    AudioQuality audioQuality = AudioQuality.high,
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    return YtFlutterMusicapiPlatform.instance
+        .streamCharts(
+          country: country,
+          limit: limit,
+          thumbQuality: thumbQuality.value,
+          audioQuality: audioQuality.value,
+          includeAudioUrl: includeAudioUrl,
+          includeAlbumArt: includeAlbumArt,
+        )
+        .map((item) => ChartItem.fromMap(item));
+  }
+
+  Stream<ArtistAlbum> streamArtistAlbums({
+    required String artistName,
+    int maxAlbums = 5,
+    int maxSongsPerAlbum = 10,
+    int maxWorkers = 5,
+    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
+    AudioQuality audioQuality = AudioQuality.high,
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    return YtFlutterMusicapiPlatform.instance
+        .streamArtistAlbums(
+          artistName: artistName,
+          maxAlbums: maxAlbums,
+          maxSongsPerAlbum: maxSongsPerAlbum,
+          maxWorkers: maxWorkers,
+          thumbQuality: thumbQuality.value,
+          audioQuality: audioQuality.value,
+          includeAudioUrl: includeAudioUrl,
+          includeAlbumArt: includeAlbumArt,
+        )
+        .map((item) => ArtistAlbum.fromMap(item));
+  }
+
+  /// Stream artist singles/EPs
+  Stream<ArtistAlbum> streamArtistSingles({
+    required String artistName,
+    int maxSingles = 5,
+    int maxSongsPerSingle = 10,
+    int maxWorkers = 5,
+    ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
+    AudioQuality audioQuality = AudioQuality.high,
+    bool includeAudioUrl = true,
+    bool includeAlbumArt = true,
+  }) {
+    return YtFlutterMusicapiPlatform.instance
+        .streamArtistSingles(
+          artistName: artistName,
+          maxSingles: maxSingles,
+          maxSongsPerSingle: maxSongsPerSingle,
+          maxWorkers: maxWorkers,
+          thumbQuality: thumbQuality.value,
+          audioQuality: audioQuality.value,
+          includeAudioUrl: includeAudioUrl,
+          includeAlbumArt: includeAlbumArt,
+        )
+        .map((item) => ArtistAlbum.fromMap(item));
   }
 
   /// Fetches lyrics for a song from YouTube Music

@@ -1,3 +1,5 @@
+from asyncio import as_completed
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 import logging
 import re
@@ -14,8 +16,8 @@ import threading
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-ytmv = "1.10.3"
-ytdlpv = "2025.06.30"
+ytmv = "1.10.3" '''Latest stable version as of July 2025'''
+ytdlpv = "2025.07.21"  '''Latest stable version as of July 2025'''
 
 # For Debugging
 try:
@@ -789,6 +791,9 @@ class YTMusicSearcher:
     def get_hq_album_art_from_ytdlp(self, video_id: str) -> Optional[str]:
         """Get high quality album art using yt-dlp from video metadata"""
         try:
+            if not video_id:
+                return None
+                
             ydl_opts = {
                 "quiet": True,
                 "no_warnings": True,
@@ -813,6 +818,9 @@ class YTMusicSearcher:
                 download=False
             )
             
+            if not info:
+                return None
+            
             # First try to get album art from metadata
             album_art_url = self._get_album_art_from_metadata(info)
             
@@ -823,7 +831,7 @@ class YTMusicSearcher:
                     # Filter for high quality thumbnails (prefer square ones for album art)
                     hq_thumbnails = [
                         t for t in thumbnails 
-                        if t.get('width', 0) >= 720 and t.get('height', 0) >= 720
+                        if t and t.get('width', 0) >= 720 and t.get('height', 0) >= 720
                     ]
                     
                     if hq_thumbnails:
@@ -838,11 +846,13 @@ class YTMusicSearcher:
                         album_art_url = hq_thumbnails[0].get('url', '')
                     else:
                         # Fall back to highest resolution thumbnail
-                        thumbnails.sort(
-                            key=lambda t: (t.get('width', 0) * t.get('height', 0)),
-                            reverse=True
-                        )
-                        album_art_url = thumbnails[0].get('url', '')
+                        valid_thumbnails = [t for t in thumbnails if t and t.get('url')]
+                        if valid_thumbnails:
+                            valid_thumbnails.sort(
+                                key=lambda t: (t.get('width', 0) * t.get('height', 0)),
+                                reverse=True
+                            )
+                            album_art_url = valid_thumbnails[0].get('url', '')
             
             if album_art_url:
                 print(f"HQ Album Art found: {album_art_url}")
@@ -857,6 +867,9 @@ class YTMusicSearcher:
     def _get_album_art_from_metadata(self, info: dict) -> Optional[str]:
         """Try to get album art from video metadata"""
         try:
+            if not info or not isinstance(info, dict):
+                return None
+                
             # Check for album art in various metadata fields
             album_art_fields = ['album_art', 'album_artwork', 'artwork', 'cover']
             
@@ -879,29 +892,39 @@ class YTMusicSearcher:
     def get_youtube_music_album_art(self, video_id: str) -> Optional[str]:
         """Get album art specifically from YouTube Music metadata"""
         try:
+            if not video_id:
+                return None
+                
             # Use YTMusic to get song details which might have better album art
             song_info = self.ytmusic.get_song(video_id)
+            
+            if not song_info:
+                return None
             
             # Extract album art from song info
             thumbnails = song_info.get('videoDetails', {}).get('thumbnail', {}).get('thumbnails', [])
             
             if thumbnails:
-                # Sort by resolution to get highest quality
-                thumbnails.sort(
-                    key=lambda t: (t.get('width', 0) * t.get('height', 0)),
-                    reverse=True
-                )
+                # Filter out None values
+                valid_thumbnails = [t for t in thumbnails if t and t.get('url')]
                 
-                # Prefer square thumbnails for album art
-                square_thumbnails = [
-                    t for t in thumbnails 
-                    if abs(1.0 - (t.get('width', 1) / t.get('height', 1))) < 0.1
-                ]
-                
-                if square_thumbnails:
-                    return square_thumbnails[0].get('url', '')
-                else:
-                    return thumbnails[0].get('url', '')
+                if valid_thumbnails:
+                    # Sort by resolution to get highest quality
+                    valid_thumbnails.sort(
+                        key=lambda t: (t.get('width', 0) * t.get('height', 0)),
+                        reverse=True
+                    )
+                    
+                    # Prefer square thumbnails for album art
+                    square_thumbnails = [
+                        t for t in valid_thumbnails 
+                        if abs(1.0 - (t.get('width', 1) / t.get('height', 1))) < 0.1
+                    ]
+                    
+                    if square_thumbnails:
+                        return square_thumbnails[0].get('url', '')
+                    else:
+                        return valid_thumbnails[0].get('url', '')
             
             return None
             
@@ -911,53 +934,99 @@ class YTMusicSearcher:
 
     def _get_album_art_unified(self, video_id: str, song_data: dict, thumb_quality: ThumbnailQuality) -> str:
         """Unified method to get album art with quality settings"""
-        album_art = ""
-        
-        if thumb_quality in [ThumbnailQuality.HIGH, ThumbnailQuality.VERY_HIGH]:
-            print(f"🖼️ Getting HQ album art for: {video_id}")
+        try:
+            # Validate inputs
+            if not video_id:
+                print("⚠️ No video_id provided for album art")
+                return ""
             
-            # Method 1: Try YouTube Music specific album art
-            album_art = self.get_youtube_music_album_art(video_id)
+            if not song_data or not isinstance(song_data, dict):
+                print("⚠️ Invalid song_data provided for album art")
+                return ""
             
-            # Method 2: Try yt-dlp with album art focus
-            if not album_art:
-                album_art = self.get_hq_album_art_from_ytdlp(video_id)
+            album_art = ""
             
-            # Method 3: Fallback to song thumbnails
-            if not album_art:
-                print("🔄 Falling back to song thumbnails")
-                thumbnails = song_data.get("thumbnails", [])
-                if thumbnails:
-                    base_url = thumbnails[-1].get("url", "")
-                    if base_url:
-                        if thumb_quality == ThumbnailQuality.HIGH:
-                            album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
-                        elif thumb_quality == ThumbnailQuality.VERY_HIGH:
-                            album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
-                        else:
-                            album_art = base_url
-            
-            # Apply quality settings to HQ URLs if they contain YouTube image patterns
-            if album_art and any(pattern in album_art for pattern in ['googleusercontent.com', 'ytimg.com', 'youtube.com']):
-                if thumb_quality == ThumbnailQuality.HIGH:
-                    album_art = re.sub(r'w\d+-h\d+', 'w320-h320', album_art)
-                elif thumb_quality == ThumbnailQuality.VERY_HIGH:
-                    album_art = re.sub(r'w\d+-h\d+', 'w544-h544', album_art)
-        else:
-            # Use song thumbnails for LOW and MED quality
+            # First, check if we already have good Google URLs in thumbnails (from radio)
             thumbnails = song_data.get("thumbnails", [])
-            if thumbnails:
-                base_url = thumbnails[-1].get("url", "")
+            
+            # Ensure thumbnails is a list and filter out None values
+            if not isinstance(thumbnails, list):
+                thumbnails = []
+            else:
+                thumbnails = [t for t in thumbnails if t and isinstance(t, dict)]
+            
+            google_thumbs = [t for t in thumbnails if t.get('url') and 'googleusercontent.com' in t.get('url', '')]
+            
+            if google_thumbs:
+                print("✅ Using existing Google album art from radio/search data")
+                # Sort by resolution and get the best one
+                google_thumbs.sort(key=lambda t: (t.get('width', 0) * t.get('height', 0)), reverse=True)
+                base_url = google_thumbs[0].get('url', '')
+                
+                # Apply quality settings
                 if base_url:
-                    if thumb_quality == ThumbnailQuality.LOW:
-                        album_art = re.sub(r'w\d+-h\d+', 'w60-h60', base_url)
+                    if thumb_quality == ThumbnailQuality.VERY_HIGH:
+                        album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
+                    elif thumb_quality == ThumbnailQuality.HIGH:
+                        album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
                     elif thumb_quality == ThumbnailQuality.MED:
                         album_art = re.sub(r'w\d+-h\d+', 'w120-h120', base_url)
-                    else:
-                        album_art = base_url
-        
-        print(f"🖼️ Album art URL: {album_art}")
-        return album_art
+                    else:  # LOW
+                        album_art = re.sub(r'w\d+-h\d+', 'w60-h60', base_url)
+                    
+                    return album_art
+            
+            # If no good Google URLs found, use your existing HQ methods
+            if thumb_quality in [ThumbnailQuality.HIGH, ThumbnailQuality.VERY_HIGH]:
+                print(f"🖼️ Getting HQ album art for: {video_id}")
+                
+                # Method 1: Try YouTube Music specific album art
+                album_art = self.get_youtube_music_album_art(video_id)
+                
+                # Method 2: Try yt-dlp with album art focus
+                if not album_art:
+                    album_art = self.get_hq_album_art_from_ytdlp(video_id)
+                
+                # Method 3: Fallback to song thumbnails
+                if not album_art and thumbnails:
+                    print("🔄 Falling back to song thumbnails")
+                    valid_thumbnails = [t for t in thumbnails if t.get('url')]
+                    if valid_thumbnails:
+                        base_url = valid_thumbnails[-1].get("url", "")
+                        if base_url:
+                            if thumb_quality == ThumbnailQuality.HIGH:
+                                album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
+                            elif thumb_quality == ThumbnailQuality.VERY_HIGH:
+                                album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
+                            else:
+                                album_art = base_url
+                
+                # Apply quality settings to HQ URLs if they contain YouTube image patterns
+                if album_art and any(pattern in album_art for pattern in ['googleusercontent.com', 'ytimg.com', 'youtube.com']):
+                    if thumb_quality == ThumbnailQuality.HIGH:
+                        album_art = re.sub(r'w\d+-h\d+', 'w320-h320', album_art)
+                    elif thumb_quality == ThumbnailQuality.VERY_HIGH:
+                        album_art = re.sub(r'w\d+-h\d+', 'w544-h544', album_art)
+            else:
+                # Use song thumbnails for LOW and MED quality
+                if thumbnails:
+                    valid_thumbnails = [t for t in thumbnails if t.get('url')]
+                    if valid_thumbnails:
+                        base_url = valid_thumbnails[-1].get("url", "")
+                        if base_url:
+                            if thumb_quality == ThumbnailQuality.LOW:
+                                album_art = re.sub(r'w\d+-h\d+', 'w60-h60', base_url)
+                            elif thumb_quality == ThumbnailQuality.MED:
+                                album_art = re.sub(r'w\d+-h\d+', 'w120-h120', base_url)
+                            else:
+                                album_art = base_url
+            
+            print(f"🖼️ Album art URL: {album_art}")
+            return album_art
+            
+        except Exception as e:
+            print(f"⚠️ Error in _get_album_art_unified: {e}")
+            return ""
 
     def _get_audio_url_with_retries(self, video_id: str, audio_quality: AudioQuality) -> Optional[str]:
         """Unified method to get audio URL with retries and fallback qualities"""
@@ -1137,12 +1206,131 @@ class YTMusicSearcher:
             inspector.cancel_search(search_id)
 
 
+    def get_radio(
+        self,
+        video_id: str,
+        limit: int = 100,
+        thumb_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
+        include_audio_url: bool = True,
+        include_album_art: bool = True
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Generate radio playlist from a given video ID."""
+        import time
+        inspector = SearchInspector.get_instance()
+        search_id = f"radio_{hash(video_id)}_{int(time.time())}"
+
+        # Convert string parameters to enum objects
+        thumb_quality_enum = ThumbnailQuality[thumb_quality] if hasattr(ThumbnailQuality, thumb_quality) else ThumbnailQuality.VERY_HIGH
+        audio_quality_enum = AudioQuality[audio_quality] if hasattr(AudioQuality, audio_quality) else AudioQuality.HIGH
+
+        def generate_logic():
+            print(f"[{search_id}] 📻 Generating radio playlist from video ID: {video_id}")
+
+            try:
+                # Get radio playlist
+                radio_playlist = self.ytmusic.get_watch_playlist(
+                    videoId=video_id,
+                    radio=True,
+                    limit=limit
+                )
+
+                if not radio_playlist or not radio_playlist.get("tracks"):
+                    print(f"[{search_id}] ❌ No radio tracks found")
+                    return
+
+                tracks = radio_playlist["tracks"]
+                
+                # Filter out the original video ID from the playlist
+                filtered_tracks = [track for track in tracks if track.get("videoId") != video_id]
+                
+                # Limit the tracks to the requested amount
+                final_tracks = filtered_tracks[:limit]
+                
+                print(f"[{search_id}] 🎵 Found {len(final_tracks)} radio tracks")
+
+                processed_count = 0
+
+                for track in final_tracks:
+                    if not inspector.is_active(search_id):
+                        return
+                    if processed_count >= limit:
+                        break
+
+                    track_video_id = track.get("videoId")
+                    if not track_video_id:
+                        continue
+
+                    try:
+                        # Extract artist name for consistency
+                        artists_list = track.get('artists', [])
+                        if artists_list:
+                            # Use the first artist as the primary artist
+                            primary_artist = artists_list[0].get('name', 'Unknown')
+                            # Create artists string like in get_artist_songs
+                            artists_string = ", ".join(a.get('name', 'Unknown') for a in artists_list)
+                        else:
+                            primary_artist = 'Unknown'
+                            artists_string = 'Unknown'
+
+                       # Properly handle the thumbnail structure from get_watch_playlist
+                        if 'thumbnail' in track and isinstance(track['thumbnail'], list):
+                            track['thumbnails'] = track['thumbnail']  # Radio already has proper Google URLs
+                        elif 'thumbnails' not in track:
+                            track['thumbnails'] = []
+
+                        # Build track data using the same method as get_artist_songs
+                        track_data = self._build_song_data(
+                            video_id=track_video_id,
+                            title=track.get('title', 'Unknown'),
+                            artists=artists_string,
+                            duration=track.get('duration'),
+                            song_data=track,
+                            thumb_quality=thumb_quality_enum,
+                            audio_quality=audio_quality_enum,
+                            include_album_art=include_album_art,
+                            include_audio_url=include_audio_url,
+                            year=track.get('year'),
+                            artist_name=primary_artist
+                        )
+
+                        # Only yield if we have valid track data
+                        if track_data and (not include_audio_url or track_data.get('audioUrl')):
+                            processed_count += 1
+                            print(f"[{search_id}] 🎧 Yielding radio track {processed_count}: {track_data.get('title', 'Unknown')} - {track_data.get('artists', 'Unknown')}")
+                            yield track_data
+
+                    except Exception as e:
+                        print(f"[{search_id}] ⚠️ Error processing radio track: {e}")
+                        continue
+
+                print(f"[{search_id}] ✅ Radio generation complete. Yielded {processed_count} tracks")
+
+            except GeneratorExit:
+                print(f"[{search_id}] 🔚 Generator closed")
+                raise
+            except Exception as e:
+                print(f"[{search_id}] 💥 Unexpected error: {e}")
+                raise
+
+        def generator():
+            yield from generate_logic()
+
+        gen = generator()
+        inspector.register_search(search_id, "radio", gen)
+
+        try:
+            yield from gen
+        finally:
+            inspector.cancel_search(search_id)
+
+
 
 
     def get_artist_songs(
         self,
         artist_name: str,
-        limit: int = 65,
+        limit: int = 80,
         thumb_quality: str = "VERY_HIGH",
         audio_quality: str = "HIGH",
         include_audio_url: bool = True,
@@ -1243,6 +1431,712 @@ class YTMusicSearcher:
         finally:
             inspector.cancel_search(search_id)
 
+
+    def get_charts(
+        self,
+        country: str = "US",
+        limit: int = 50,
+        thumb_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
+        include_audio_url: bool = True,
+        include_album_art: bool = True
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Generate charts data from a given country code."""
+        import time
+        inspector = SearchInspector.get_instance()
+        search_id = f"charts_{hash(country)}_{int(time.time())}"
+
+        # Convert string parameters to enum objects
+        thumb_quality_enum = ThumbnailQuality[thumb_quality] if hasattr(ThumbnailQuality, thumb_quality) else ThumbnailQuality.VERY_HIGH
+        audio_quality_enum = AudioQuality[audio_quality] if hasattr(AudioQuality, audio_quality) else AudioQuality.HIGH
+
+        def generate_logic():
+            print(f"[{search_id}] 📊 Fetching charts for country: {country}")
+
+            try:
+                # Get charts data
+                charts_data = self.ytmusic.get_charts(country=country)
+
+                if not charts_data:
+                    print(f"[{search_id}] ❌ No charts data found for country: {country}")
+                    return
+
+                processed_count = 0
+                
+                # Process songs from charts
+                songs_section = charts_data.get("songs", {})
+                if songs_section and "items" in songs_section:
+                    songs = songs_section["items"]
+                    print(f"[{search_id}] 🎵 Found {len(songs)} chart songs")
+                    
+                    for song in songs:
+                        if not inspector.is_active(search_id):
+                            return
+                        if processed_count >= limit:
+                            break
+
+                        song_video_id = song.get("videoId")
+                        if not song_video_id:
+                            continue
+
+                        try:
+                            # Extract artist information
+                            artists_list = song.get('artists', [])
+                            if artists_list:
+                                # Use the first artist as the primary artist
+                                primary_artist = artists_list[0].get('name', 'Unknown')
+                                # Create artists string
+                                artists_string = ", ".join(a.get('name', 'Unknown') for a in artists_list)
+                            else:
+                                primary_artist = 'Unknown'
+                                artists_string = 'Unknown'
+
+                            # Handle thumbnails
+                            if 'thumbnails' not in song:
+                                song['thumbnails'] = []
+
+                            # Build track data
+                            track_data = self._build_song_data(
+                                video_id=song_video_id,
+                                title=song.get('title', 'Unknown'),
+                                artists=artists_string,
+                                duration=None,  # Charts don't typically include duration
+                                song_data=song,
+                                thumb_quality=thumb_quality_enum,
+                                audio_quality=audio_quality_enum,
+                                include_album_art=include_album_art,
+                                include_audio_url=include_audio_url,
+                                year=None,
+                                artist_name=primary_artist
+                            )
+
+                            # Add chart-specific data
+                            if track_data:
+                                track_data['rank'] = song.get('rank', 'Unknown')
+                                track_data['trend'] = song.get('trend', 'neutral')
+                                track_data['isExplicit'] = song.get('isExplicit', False)
+                                track_data['album'] = song.get('album', {})
+                                track_data['chart_type'] = 'songs'
+                                track_data['country'] = country
+
+                                # Only yield if we have valid track data
+                                if not include_audio_url or track_data.get('audioUrl'):
+                                    processed_count += 1
+                                    print(f"[{search_id}] 🎧 Yielding chart song {processed_count}: {track_data.get('title', 'Unknown')} - Rank: {track_data.get('rank', 'Unknown')}")
+                                    yield track_data
+
+                        except Exception as e:
+                            print(f"[{search_id}] ⚠️ Error processing chart song: {e}")
+                            continue
+
+                # Process videos from charts
+                videos_section = charts_data.get("videos", {})
+                if videos_section and "items" in videos_section:
+                    videos = videos_section["items"]
+                    print(f"[{search_id}] 🎬 Found {len(videos)} chart videos")
+                    
+                    for video in videos:
+                        if not inspector.is_active(search_id):
+                            return
+                        if processed_count >= limit:
+                            break
+
+                        video_id = video.get("videoId")
+                        if not video_id:
+                            continue
+
+                        try:
+                            # Extract artist information for videos
+                            artists_list = video.get('artists', [])
+                            if artists_list:
+                                primary_artist = artists_list[0].get('name', 'Unknown')
+                                artists_string = ", ".join(a.get('name', 'Unknown') for a in artists_list)
+                            else:
+                                primary_artist = 'Unknown'
+                                artists_string = 'Unknown'
+
+                            # Handle thumbnails
+                            if 'thumbnails' not in video:
+                                video['thumbnails'] = []
+
+                            # Build track data for video
+                            track_data = self._build_song_data(
+                                video_id=video_id,
+                                title=video.get('title', 'Unknown'),
+                                artists=artists_string,
+                                duration=None,
+                                song_data=video,
+                                thumb_quality=thumb_quality_enum,
+                                audio_quality=audio_quality_enum,
+                                include_album_art=include_album_art,
+                                include_audio_url=include_audio_url,
+                                year=None,
+                                artist_name=primary_artist
+                            )
+
+                            # Add video-specific data
+                            if track_data:
+                                track_data['views'] = video.get('views', '0')
+                                track_data['playlistId'] = video.get('playlistId', '')
+                                track_data['chart_type'] = 'videos'
+                                track_data['country'] = country
+
+                                # Only yield if we have valid track data
+                                if not include_audio_url or track_data.get('audioUrl'):
+                                    processed_count += 1
+                                    print(f"[{search_id}] 🎧 Yielding chart video {processed_count}: {track_data.get('title', 'Unknown')} - Views: {track_data.get('views', '0')}")
+                                    yield track_data
+
+                        except Exception as e:
+                            print(f"[{search_id}] ⚠️ Error processing chart video: {e}")
+                            continue
+
+                # Process trending videos
+                trending_section = charts_data.get("trending", {})
+                if trending_section and "items" in trending_section:
+                    trending = trending_section["items"]
+                    print(f"[{search_id}] 🔥 Found {len(trending)} trending videos")
+                    
+                    for trend_video in trending:
+                        if not inspector.is_active(search_id):
+                            return
+                        if processed_count >= limit:
+                            break
+
+                        video_id = trend_video.get("videoId")
+                        if not video_id:
+                            continue
+
+                        try:
+                            # Extract artist information for trending
+                            artists_list = trend_video.get('artists', [])
+                            if artists_list:
+                                primary_artist = artists_list[0].get('name', 'Unknown')
+                                artists_string = ", ".join(a.get('name', 'Unknown') for a in artists_list)
+                            else:
+                                primary_artist = 'Unknown'
+                                artists_string = 'Unknown'
+
+                            # Handle thumbnails
+                            if 'thumbnails' not in trend_video:
+                                trend_video['thumbnails'] = []
+
+                            # Build track data for trending video
+                            track_data = self._build_song_data(
+                                video_id=video_id,
+                                title=trend_video.get('title', 'Unknown'),
+                                artists=artists_string,
+                                duration=None,
+                                song_data=trend_video,
+                                thumb_quality=thumb_quality_enum,
+                                audio_quality=audio_quality_enum,
+                                include_album_art=include_album_art,
+                                include_audio_url=include_audio_url,
+                                year=None,
+                                artist_name=primary_artist
+                            )
+
+                            # Add trending-specific data
+                            if track_data:
+                                track_data['views'] = trend_video.get('views', '0')
+                                track_data['playlistId'] = trend_video.get('playlistId', '')
+                                track_data['chart_type'] = 'trending'
+                                track_data['country'] = country
+
+                                # Only yield if we have valid track data
+                                if not include_audio_url or track_data.get('audioUrl'):
+                                    processed_count += 1
+                                    print(f"[{search_id}] 🎧 Yielding trending video {processed_count}: {track_data.get('title', 'Unknown')} - Views: {track_data.get('views', '0')}")
+                                    yield track_data
+
+                        except Exception as e:
+                            print(f"[{search_id}] ⚠️ Error processing trending video: {e}")
+                            continue
+
+                print(f"[{search_id}] ✅ Charts generation complete. Yielded {processed_count} items")
+
+            except GeneratorExit:
+                print(f"[{search_id}] 🔚 Generator closed")
+                raise
+            except Exception as e:
+                print(f"[{search_id}] 💥 Unexpected error: {e}")
+                raise
+
+        def generator():
+            yield from generate_logic()
+
+        gen = generator()
+        inspector.register_search(search_id, "charts", gen)
+
+        try:
+            yield from gen
+        finally:
+            inspector.cancel_search(search_id)
+
+    def get_artist_albums(
+        self,
+        artist_name: str,
+        max_albums: int = 5,
+        max_songs_per_album: int = 10,
+        thumb_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
+        include_audio_url: bool = True,
+        include_album_art: bool = True,
+        max_workers: int = 5
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Get artist albums with songs in each album using workers for parallel processing."""
+        inspector = SearchInspector.get_instance()
+        search_id = f"artist_albums_{hash(artist_name)}_{int(time.time())}"
+
+        # Convert string parameters to enum objects
+        thumb_quality_enum = ThumbnailQuality[thumb_quality] if hasattr(ThumbnailQuality, thumb_quality) else ThumbnailQuality.VERY_HIGH
+        audio_quality_enum = AudioQuality[audio_quality] if hasattr(AudioQuality, audio_quality) else AudioQuality.HIGH
+
+        def get_album_details(album_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Worker function to get album details."""
+            try:
+                album_id = album_data.get('browseId')
+                if not album_id:
+                    return None
+                    
+                album_details = self.ytmusic.get_album(album_id)
+                if not album_details or not album_details.get('tracks'):
+                    return None
+                    
+                return {
+                    'album_info': album_data,
+                    'details': album_details,
+                    'tracks': album_details['tracks'][:max_songs_per_album]  # Limit songs per album
+                }
+            except Exception as e:
+                print(f"[{search_id}] ⚠️ Error getting album details: {e}")
+                return None
+
+        def process_track_batch(track_batch: List[tuple]) -> List[Dict[str, Any]]:
+            """Worker function to process a batch of tracks."""
+            processed_tracks = []
+            
+            for album_title, track, year in track_batch:
+                if not inspector.is_active(search_id):
+                    break
+                    
+                try:
+                    vid = track.get('videoId')
+                    if not vid:
+                        continue
+
+                    track_data = self._build_song_data(
+                        video_id=vid,
+                        title=track.get('title', 'Unknown'),
+                        artists=", ".join(a.get('name', 'Unknown') for a in track.get('artists', [])),
+                        duration=track.get('duration'),
+                        song_data=track,
+                        thumb_quality=thumb_quality_enum,
+                        audio_quality=audio_quality_enum,
+                        include_album_art=include_album_art,
+                        include_audio_url=include_audio_url,
+                        year=year,
+                        artist_name=artist_name
+                    )
+
+                    if not include_audio_url or track_data.get('audioUrl'):
+                        track_data['album_title'] = album_title
+                        processed_tracks.append(track_data)
+                        
+                except Exception as e:
+                    print(f"[{search_id}] ⚠️ Error processing track: {e}")
+                    continue
+                    
+            return processed_tracks
+
+        def get_safe_album_art(tracks, thumb_quality_enum):
+            """Safely get album art from tracks list."""
+            if not tracks:
+                return ""
+            
+            for track in tracks:
+                if track and track.get('videoId'):
+                    try:
+                        return self._get_album_art_unified(track.get('videoId'), track, thumb_quality_enum)
+                    except Exception as e:
+                        print(f"[{search_id}] ⚠️ Error getting album art: {e}")
+                        continue
+            
+            return ""
+
+        def generate_logic():
+            print(f"[{search_id}] 🎤 Fetching artist albums — {artist_name}")
+
+            try:
+                # Search for the artist
+                artist_results = self.ytmusic.search(artist_name, filter="artists", limit=1)
+                if not artist_results:
+                    print(f"[{search_id}] ❌ No artist found")
+                    return
+
+                target = next((r for r in artist_results if r.get("artist", "").lower() == artist_name.lower()), artist_results[0])
+                browse_id = target.get("browseId")
+                artist_data = self.ytmusic.get_artist(browse_id)
+
+                if 'albums' not in artist_data or not artist_data['albums'].get('results'):
+                    print(f"[{search_id}] ❌ No albums found")
+                    return
+
+                # Get artist albums (limited to max_albums)
+                albums = self.ytmusic.get_artist_albums(
+                    artist_data['albums']['browseId'],
+                    artist_data['albums']['params'],
+                    limit=max_albums
+                )[:max_albums]
+
+                if not albums:
+                    print(f"[{search_id}] ❌ No albums retrieved")
+                    return
+
+                # Phase 1: Get album details in parallel using workers
+                print(f"[{search_id}] 📀 Processing {len(albums)} albums with {max_workers} workers")
+                
+                album_details_list = []
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit all album detail tasks
+                    future_to_album = {executor.submit(get_album_details, album): album for album in albums}
+                    
+                    # Collect results as they complete (without asyncio)
+                    for future in future_to_album:
+                        if not inspector.is_active(search_id):
+                            break
+                        try:
+                            album_details = future.result(timeout=30)  # 30 second timeout per album
+                            if album_details:
+                                album_details_list.append(album_details)
+                        except Exception as e:
+                            print(f"[{search_id}] ⚠️ Error getting album details: {e}")
+                            continue
+
+                if not album_details_list:
+                    print(f"[{search_id}] ❌ No valid album details retrieved")
+                    return
+
+                # Phase 2: Send album info immediately
+                albums_info = {}
+                for album_details in album_details_list:
+                    album_info = album_details['album_info']
+                    tracks = album_details['tracks']
+                    
+                    album_data = {
+                        'type': 'album',
+                        'title': album_info.get('title', 'Unknown Album'),
+                        'year': album_info.get('year', ''),
+                        'albumArt': get_safe_album_art(tracks, thumb_quality_enum),
+                        'artist': artist_name,
+                        'tracks': []
+                    }
+                    
+                    albums_info[album_info.get('title', 'Unknown Album')] = album_data
+                    print(f"[{search_id}] 💿 Yielding album: {album_data['title']}")
+                    yield album_data
+
+                # Phase 3: Process tracks in batches (same position from each album)
+                max_tracks = max(len(details['tracks']) for details in album_details_list) if album_details_list else 0
+                
+                for track_index in range(max_tracks):
+                    if not inspector.is_active(search_id):
+                        break
+                        
+                    # Collect one track from each album at the same index
+                    track_batch = []
+                    for album_details in album_details_list:
+                        if track_index < len(album_details['tracks']):
+                            track = album_details['tracks'][track_index]
+                            album_title = album_details['album_info'].get('title', 'Unknown Album')
+                            year = album_details['album_info'].get('year', '')
+                            track_batch.append((album_title, track, year))
+
+                    if not track_batch:
+                        continue
+
+                    # Process this batch of tracks in parallel
+                    batch_size = len(track_batch)
+                    tracks_per_worker = max(1, batch_size // max_workers)
+                    
+                    with ThreadPoolExecutor(max_workers=min(max_workers, batch_size)) as executor:
+                        futures = []
+                        for i in range(0, batch_size, tracks_per_worker):
+                            batch = track_batch[i:i + tracks_per_worker]
+                            futures.append(executor.submit(process_track_batch, batch))
+                        
+                        # Collect processed tracks (without asyncio)
+                        for future in futures:
+                            if not inspector.is_active(search_id):
+                                break
+                                
+                            try:
+                                processed_tracks = future.result(timeout=30)  # 30 second timeout
+                                for track_data in processed_tracks:
+                                    album_title = track_data.pop('album_title')
+                                    if album_title in albums_info:
+                                        albums_info[album_title]['tracks'].append(track_data)
+                                        print(f"[{search_id}] 🎵 Added track to {album_title}: {track_data.get('title', 'Unknown')}")
+                            except Exception as e:
+                                print(f"[{search_id}] ⚠️ Error processing track batch: {e}")
+                                continue
+
+                    # Yield updated albums after each batch
+                    for album_title, album_data in albums_info.items():
+                        if album_data['tracks']:  # Only yield if there are tracks
+                            print(f"[{search_id}] 🔄 Updating album: {album_title} ({len(album_data['tracks'])} tracks)")
+                            yield album_data.copy()  # Yield a copy to avoid reference issues
+
+            except GeneratorExit:
+                print(f"[{search_id}] 🔚 Generator closed")
+                raise
+            except Exception as e:
+                print(f"[{search_id}] 💥 Unexpected error: {e}")
+                raise
+
+        def generator():
+            yield from generate_logic()
+
+        gen = generator()
+        inspector.register_search(search_id, "artist_albums", gen)
+
+        try:
+            yield from gen
+        finally:
+            inspector.cancel_search(search_id)
+
+
+    def get_artist_singles_eps(
+        self,
+        artist_name: str,
+        max_singles: int = 5,
+        max_songs_per_single: int = 10,
+        thumb_quality: str = "VERY_HIGH",
+        audio_quality: str = "HIGH",
+        include_audio_url: bool = True,
+        include_album_art: bool = True,
+        max_workers: int = 5
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Get artist singles and EPs with songs in each using workers for parallel processing."""
+        inspector = SearchInspector.get_instance()
+        search_id = f"artist_singles_{hash(artist_name)}_{int(time.time())}"
+
+        # Convert string parameters to enum objects
+        thumb_quality_enum = ThumbnailQuality[thumb_quality] if hasattr(ThumbnailQuality, thumb_quality) else ThumbnailQuality.VERY_HIGH
+        audio_quality_enum = AudioQuality[audio_quality] if hasattr(AudioQuality, audio_quality) else AudioQuality.HIGH
+
+        def get_single_details(single_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Worker function to get single/EP details."""
+            try:
+                single_id = single_data.get('browseId')
+                if not single_id:
+                    return None
+                    
+                single_details = self.ytmusic.get_album(single_id)
+                if not single_details or not single_details.get('tracks'):
+                    return None
+                    
+                return {
+                    'single_info': single_data,
+                    'details': single_details,
+                    'tracks': single_details['tracks'][:max_songs_per_single]  # Limit songs per single
+                }
+            except Exception as e:
+                print(f"[{search_id}] ⚠️ Error getting single/EP details: {e}")
+                return None
+
+        def process_track_batch(track_batch: List[tuple]) -> List[Dict[str, Any]]:
+            """Worker function to process a batch of tracks."""
+            processed_tracks = []
+            
+            for single_title, track, year in track_batch:
+                if not inspector.is_active(search_id):
+                    break
+                    
+                try:
+                    vid = track.get('videoId')
+                    if not vid:
+                        continue
+
+                    track_data = self._build_song_data(
+                        video_id=vid,
+                        title=track.get('title', 'Unknown'),
+                        artists=", ".join(a.get('name', 'Unknown') for a in track.get('artists', [])),
+                        duration=track.get('duration'),
+                        song_data=track,
+                        thumb_quality=thumb_quality_enum,
+                        audio_quality=audio_quality_enum,
+                        include_album_art=include_album_art,
+                        include_audio_url=include_audio_url,
+                        year=year,
+                        artist_name=artist_name
+                    )
+
+                    if not include_audio_url or track_data.get('audioUrl'):
+                        track_data['single_title'] = single_title
+                        processed_tracks.append(track_data)
+                        
+                except Exception as e:
+                    print(f"[{search_id}] ⚠️ Error processing track: {e}")
+                    continue
+                    
+            return processed_tracks
+
+        def get_safe_album_art(tracks, thumb_quality_enum):
+            """Safely get album art from tracks list."""
+            if not tracks:
+                return ""
+            
+            for track in tracks:
+                if track and track.get('videoId'):
+                    try:
+                        return self._get_album_art_unified(track.get('videoId'), track, thumb_quality_enum)
+                    except Exception as e:
+                        print(f"[{search_id}] ⚠️ Error getting album art: {e}")
+                        continue
+            
+            return ""
+
+        def generate_logic():
+            print(f"[{search_id}] 🎤 Fetching artist singles/EPs — {artist_name}")
+
+            try:
+                # Search for the artist
+                artist_results = self.ytmusic.search(artist_name, filter="artists", limit=1)
+                if not artist_results:
+                    print(f"[{search_id}] ❌ No artist found")
+                    return
+
+                target = next((r for r in artist_results if r.get("artist", "").lower() == artist_name.lower()), artist_results[0])
+                browse_id = target.get("browseId")
+                artist_data = self.ytmusic.get_artist(browse_id)
+
+                if 'singles' not in artist_data or not artist_data['singles'].get('results'):
+                    print(f"[{search_id}] ❌ No singles/EPs found")
+                    return
+
+                # Get artist singles/EPs (limited to max_singles)
+                singles = self.ytmusic.get_artist_albums(
+                    artist_data['singles']['browseId'],
+                    artist_data['singles']['params'],
+                    limit=max_singles
+                )[:max_singles]
+
+                if not singles:
+                    print(f"[{search_id}] ❌ No singles/EPs retrieved")
+                    return
+
+                # Phase 1: Get single/EP details in parallel using workers
+                print(f"[{search_id}] 🎵 Processing {len(singles)} singles/EPs with {max_workers} workers")
+                
+                single_details_list = []
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # Submit all single detail tasks
+                    future_to_single = {executor.submit(get_single_details, single): single for single in singles}
+                    
+                    # Collect results as they complete (without asyncio)
+                    for future in future_to_single:
+                        if not inspector.is_active(search_id):
+                            break
+                        try:
+                            single_details = future.result(timeout=30)  # 30 second timeout per single
+                            if single_details:
+                                single_details_list.append(single_details)
+                        except Exception as e:
+                            print(f"[{search_id}] ⚠️ Error getting single details: {e}")
+                            continue
+
+                if not single_details_list:
+                    print(f"[{search_id}] ❌ No valid single/EP details retrieved")
+                    return
+
+                # Phase 2: Send single/EP info immediately
+                singles_info = {}
+                for single_details in single_details_list:
+                    single_info = single_details['single_info']
+                    tracks = single_details['tracks']
+                    
+                    single_data = {
+                        'type': 'single',
+                        'title': single_info.get('title', 'Unknown Single/EP'),
+                        'year': single_info.get('year', ''),
+                        'albumArt': get_safe_album_art(tracks, thumb_quality_enum),
+                        'artist': artist_name,
+                        'tracks': []
+                    }
+                    
+                    singles_info[single_info.get('title', 'Unknown Single/EP')] = single_data
+                    print(f"[{search_id}] 🎵 Yielding single/EP: {single_data['title']}")
+                    yield single_data
+
+                # Phase 3: Process tracks in batches (same position from each single/EP)
+                max_tracks = max(len(details['tracks']) for details in single_details_list) if single_details_list else 0
+                
+                for track_index in range(max_tracks):
+                    if not inspector.is_active(search_id):
+                        break
+                        
+                    # Collect one track from each single/EP at the same index
+                    track_batch = []
+                    for single_details in single_details_list:
+                        if track_index < len(single_details['tracks']):
+                            track = single_details['tracks'][track_index]
+                            single_title = single_details['single_info'].get('title', 'Unknown Single/EP')
+                            year = single_details['single_info'].get('year', '')
+                            track_batch.append((single_title, track, year))
+
+                    if not track_batch:
+                        continue
+
+                    # Process this batch of tracks in parallel
+                    batch_size = len(track_batch)
+                    tracks_per_worker = max(1, batch_size // max_workers)
+                    
+                    with ThreadPoolExecutor(max_workers=min(max_workers, batch_size)) as executor:
+                        futures = []
+                        for i in range(0, batch_size, tracks_per_worker):
+                            batch = track_batch[i:i + tracks_per_worker]
+                            futures.append(executor.submit(process_track_batch, batch))
+                        
+                        # Collect processed tracks (without asyncio)
+                        for future in futures:
+                            if not inspector.is_active(search_id):
+                                break
+                                
+                            try:
+                                processed_tracks = future.result(timeout=30)  # 30 second timeout
+                                for track_data in processed_tracks:
+                                    single_title = track_data.pop('single_title')
+                                    if single_title in singles_info:
+                                        singles_info[single_title]['tracks'].append(track_data)
+                                        print(f"[{search_id}] 🎵 Added track to {single_title}: {track_data.get('title', 'Unknown')}")
+                            except Exception as e:
+                                print(f"[{search_id}] ⚠️ Error processing track batch: {e}")
+                                continue
+
+                    # Yield updated singles after each batch
+                    for single_title, single_data in singles_info.items():
+                        if single_data['tracks']:  # Only yield if there are tracks
+                            print(f"[{search_id}] 🔄 Updating single: {single_title} ({len(single_data['tracks'])} tracks)")
+                            yield single_data.copy()  # Yield a copy to avoid reference issues
+
+            except GeneratorExit:
+                print(f"[{search_id}] 🔚 Generator closed")
+                raise
+            except Exception as e:
+                print(f"[{search_id}] 💥 Unexpected error: {e}")
+                raise
+
+        def generator():
+            yield from generate_logic()
+
+        gen = generator()
+        inspector.register_search(search_id, "artist_singles", gen)
+
+        try:
+            yield from gen
+        finally:
+            inspector.cancel_search(search_id)
 
     def get_audio_url_flexible(
         self,
@@ -1888,7 +2782,7 @@ class YTMusicRelatedFetcher:
         self,
         song_name: str,
         artist_name: str,
-        limit: int = 65,
+        limit: int = 100,
         thumb_quality: str = "VERY_HIGH",
         audio_quality: str = "HIGH",
         include_audio_url: bool = True,

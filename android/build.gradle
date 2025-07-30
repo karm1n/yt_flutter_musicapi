@@ -107,7 +107,7 @@ chaquopy {
         version "3.11"
         buildPython "C:\\Python311\\python.exe"  
         pip {
-            install "yt-dlp==2025.06.30" // Latest stable version as of July 2025
+            install "yt-dlp==2025.07.21" // Latest stable version as of July 2025
             install "ytmusicapi==1.10.3" // Latest stable version as of July 2025
         }
     }

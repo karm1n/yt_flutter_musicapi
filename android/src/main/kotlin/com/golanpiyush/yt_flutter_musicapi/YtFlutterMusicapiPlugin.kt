@@ -42,7 +42,10 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
     private lateinit var searchStreamChannel: EventChannel
     private lateinit var relatedSongsStreamChannel: EventChannel
     private lateinit var artistSongsStreamChannel: EventChannel
-    
+    private lateinit var radioStreamChannel: EventChannel
+    private lateinit var artistAlbumsStreamChannel: EventChannel
+    private lateinit var artistSinglesStreamChannel: EventChannel
+    private lateinit var chartsStreamChannel: EventChannel
 
     // Search Manager
     internal val searchManager = SearchManager()
@@ -57,12 +60,17 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
         private const val TAG = "YTMusicAPI"
         private const val CHANNEL_NAME = "yt_flutter_musicapi"
 
-        const val SEARCH_TYPE_LYRICS = "fetch_lyrics"
+        
 
         // Methods available
         const val SEARCH_TYPE_SEARCH = "music_search"
         const val SEARCH_TYPE_RELATED = "related_songs"
         const val SEARCH_TYPE_ARTIST = "artist_songs"
+        const val SEARCH_TYPE_LYRICS = "fetch_lyrics"
+        const val SEARCH_TYPE_RADIO = "RADIO"
+        const val SEARCH_TYPE_CHARTS = "charts"
+        const val SEARCH_TYPE_ARTIST_ALBUMS = "ARTIST_ALBUMS"
+        const val SEARCH_TYPE_ARTIST_SINGLES = "ARTIST_SINGLES"
         
     }
 
@@ -86,9 +94,19 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
         artistSongsStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/artistSongsStream").apply {
             setStreamHandler(ArtistSongsStreamHandler(this@YtFlutterMusicapiPlugin))
         }
-        
-
-       
+        radioStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/radioStream").apply {
+            setStreamHandler(RadioStreamHandler(this@YtFlutterMusicapiPlugin))
+        }
+        artistAlbumsStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/artistAlbumsStream").apply {
+            setStreamHandler(ArtistAlbumsStreamHandler(this@YtFlutterMusicapiPlugin))
+        }
+        artistSinglesStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/artistSinglesStream").apply {
+            setStreamHandler(ArtistSinglesStreamHandler(this@YtFlutterMusicapiPlugin))
+        }   
+        chartsStreamChannel = EventChannel(flutterPluginBinding.binaryMessenger, "yt_flutter_musicapi/chartsStream").apply {
+            setStreamHandler(ChartsStreamHandler(this@YtFlutterMusicapiPlugin))
+        }
+           
     }
 
     override fun onMethodCall(call: MethodCall, result: Result) {
@@ -104,13 +122,18 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
             "startStreamingSearch" -> handleStartStreamingSearch(call, result)
             "startStreamingRelated" -> handleStartStreamingRelated(call, result)
             "startStreamingArtist" -> handleStartStreamingArtist(call, result)
-            
+            "startStreamingRadio" -> handleStartStreamingRadio(call, result)
+            "startStreamingArtistAlbums" -> handleStartStreamingArtistAlbums(call, result)
+            "startStreamingArtistSingles" -> handleStartStreamingArtistSingles(call, result)
+            "startStreamingCharts" -> handleStartStreamingCharts(call, result)
+
             // Static Methods
             "searchMusic" -> handleSearchMusic(call, result)
             "getRelatedSongs" -> handleGetRelatedSongs(call, result)
             "getArtistSongs" -> handleGetArtistSongs(call, result)
             "getAudioUrlFlexible" -> handleGetAudioUrlFlexible(call, result)
             "fetchLyrics" -> handleFetchLyrics(call, result)
+            "getCharts" -> handleGetCharts(call, result)
             
             else -> result.notImplemented()
         }
@@ -580,7 +603,7 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                 val query = call.argument<String>("query") 
                     ?: throw IllegalArgumentException("Query is required")
                 
-                val limit = call.argument<Int>("limit") ?: 10
+                val limit = call.argument<Int>("limit") ?: 25
                 val thumbQuality = call.argument<String>("thumbQuality") ?: "VERY_HIGH"
                 val audioQuality = call.argument<String>("audioQuality") ?: "HIGH"
                 val includeAudioUrl = call.argument<Boolean>("includeAudioUrl") ?: true
@@ -671,7 +694,7 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                 val artistName = call.argument<String>("artistName")
                     ?: throw IllegalArgumentException("Artist name is required")
                 
-                val limit = call.argument<Int>("limit") ?: 20
+                val limit = call.argument<Int>("limit") ?: 25
                 val thumbQuality = call.argument<String>("thumbQuality") ?: "VERY_HIGH"
                 val audioQuality = call.argument<String>("audioQuality") ?: "HIGH"
                 val includeAudioUrl = call.argument<Boolean>("includeAudioUrl") ?: true
@@ -825,6 +848,89 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                     result.error(
                         "ARTIST_SONGS_ERROR", 
                         "Failed to get artist songs: ${e.message}", 
+                        null
+                    )
+                }
+            }
+        }
+    }
+
+    private fun handleGetCharts(call: MethodCall, result: Result) {
+        coroutineScope.launch {
+            try {
+                val country = call.argument<String>("country") ?: "ZZ"
+                val limit = call.argument<Int>("limit") ?: 50
+                val thumbQuality = call.argument<String>("thumbQuality") ?: "VERY_HIGH"
+                val audioQuality = call.argument<String>("audioQuality") ?: "HIGH"
+                val includeAudioUrl = call.argument<Boolean>("includeAudioUrl") ?: true
+                val includeAlbumArt = call.argument<Boolean>("includeAlbumArt") ?: true
+                
+                if (musicSearcher == null) {
+                    throw IllegalStateException("YTMusic API not initialized")
+                }
+
+                Log.d(TAG, "Fetching charts for country: $country (limit: $limit)")
+
+                val generator = musicSearcher!!.callAttr(
+                    "get_charts",
+                    country,
+                    limit,
+                    thumbQuality,
+                    audioQuality,
+                    includeAudioUrl,
+                    includeAlbumArt
+                )
+
+                val pythonList = python?.getBuiltins()?.callAttr("list", generator)
+                    ?: throw Exception("Failed to convert generator to list")
+
+                val charts = mutableListOf<Map<String, Any?>>()
+                val count = pythonList.callAttr("__len__").toInt()
+
+                Log.d(TAG, "Processing $count chart items...")
+
+                for (i in 0 until count) {
+                    try {
+                        val chartItem = pythonList.callAttr("__getitem__", i)
+                        val chartMap = convertPythonDictToMap(chartItem)
+                        
+                        charts.add(mapOf<String, Any?>(
+                            "title" to (chartMap["title"]?.toString() ?: "Unknown"),
+                            "artists" to (chartMap["artists"]?.toString() ?: "Unknown"),
+                            "videoId" to (chartMap["videoId"]?.toString() ?: ""),
+                            "duration" to chartMap["duration"]?.toString(),
+                            "albumArt" to chartMap["albumArt"]?.toString(),
+                            "audioUrl" to chartMap["audioUrl"]?.toString(),
+                            "country" to country,
+                            "chartType" to (chartMap["chart_type"]?.toString() ?: "unknown"),
+                            "rank" to (chartMap["rank"]?.toString() ?: ""),
+                            "trend" to (chartMap["trend"]?.toString() ?: "neutral"),
+                            "views" to (chartMap["views"]?.toString() ?: ""),
+                            "isExplicit" to (chartMap["isExplicit"] as? Boolean ?: false),
+                            "playlistId" to (chartMap["playlistId"]?.toString() ?: ""),
+                            "album" to (chartMap["album"] ?: mapOf<String, Any>())
+                        ))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error processing chart item $i", e)
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    result.success(mapOf(
+                        "success" to true,
+                        "data" to charts,
+                        "count" to charts.size,
+                        "country" to country,
+                        "skipped" to (count - charts.size)
+                    ))
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in handleGetCharts", e)
+                withContext(Dispatchers.Main) {
+                    result.error(
+                        "CHARTS_ERROR", 
+                        "Failed to get charts: ${e.message}", 
                         null
                     )
                 }
@@ -1133,11 +1239,23 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
             "artistName" to artistName
         ))
     }
+    private fun handleStartStreamingCharts(call: MethodCall, result: Result) {
+        Log.d(TAG, "handleStartStreamingCharts called")
+        
+        val country = call.argument<String>("country") ?: "ZZ"
+        
+        result.success(mapOf(
+            "started" to true,
+            "message" to "Streaming charts will start when EventChannel is listened to",
+            "country" to country
+        ))
+    }
 
     private fun handleStartStreamingArtist(call: MethodCall, result: Result) {
         Log.d(TAG, "handleStartStreamingArtist called")
         
         val artistName = call.argument<String>("artistName")
+        
         
         if (artistName.isNullOrEmpty()) {
             result.error("INVALID_ARGUMENTS", "Artist name is required", null)
@@ -1147,6 +1265,54 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
         result.success(mapOf(
             "started" to true,
             "message" to "Streaming artist songs will start when EventChannel is listened to",
+            "artistName" to artistName
+        ))
+    }
+
+    private fun handleStartStreamingRadio(call: MethodCall, result: Result) {
+        Log.d(TAG, "handleStartStreamingRadio called")
+        
+        val videoId = call.argument<String>("videoId")
+        if (videoId.isNullOrEmpty()) {
+            result.error("INVALID_VIDEO_ID", "Video ID is required", null)
+            return
+        }
+        
+        result.success(mapOf(
+            "started" to true,
+            "message" to "Streaming radio will start when EventChannel is listened to",
+            "videoId" to videoId
+        ))
+    }
+
+    private fun handleStartStreamingArtistAlbums(call: MethodCall, result: Result) {
+        Log.d(TAG, "handleStartStreamingArtistAlbums called")
+        
+        val artistName = call.argument<String>("artistName")
+        if (artistName.isNullOrEmpty()) {
+            result.error("INVALID_ARGUMENTS", "Artist name is required", null)
+            return
+        }
+        
+        result.success(mapOf(
+            "started" to true,
+            "message" to "Streaming artist albums will start when EventChannel is listened to",
+            "artistName" to artistName
+        ))
+    }
+
+    private fun handleStartStreamingArtistSingles(call: MethodCall, result: Result) {
+        Log.d(TAG, "handleStartStreamingArtistSingles called")
+        
+        val artistName = call.argument<String>("artistName")
+        if (artistName.isNullOrEmpty()) {
+            result.error("INVALID_ARGUMENTS", "Artist name is required", null)
+            return
+        }
+        
+        result.success(mapOf(
+            "started" to true,
+            "message" to "Streaming artist singles will start when EventChannel is listened to",
             "artistName" to artistName
         ))
     }
