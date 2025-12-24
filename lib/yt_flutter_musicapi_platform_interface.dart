@@ -113,6 +113,22 @@ abstract class YtFlutterMusicapiPlatform extends PlatformInterface {
     throw UnimplementedError('streamCharts() has not been implemented.');
   }
 
+  /// Only returns the audio URL using videoId, no other metadata
+  ///
+  /// Parameters:
+  /// - [videoId]: YouTube video ID (required)
+  ///
+  /// Returns a Map with:
+  /// - success: bool - Whether the operation was successful
+  /// - audioUrl: String - The direct audio URL (if successful)
+  /// - error: String - Error message (if failed)
+  /// - videoId: String - The video ID used for the request
+  Future<Map<String, dynamic>> getAudioUrlFast({
+    required String videoId,
+  }) {
+    throw UnimplementedError('getAudioUrlFast() has not been implemented.');
+  }
+
   Future<Map<String, dynamic>> fetchLyrics({
     required String songName,
     required String artistName,

@@ -26,9 +26,17 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.*
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+
 
 class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope {
     private val job = SupervisorJob()
+    private val searchExecutor = Executors.newFixedThreadPool(3)
     override val coroutineContext: CoroutineContext = Dispatchers.IO + job
     
     private lateinit var channel: MethodChannel
@@ -73,6 +81,13 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
         const val SEARCH_TYPE_ARTIST_SINGLES = "ARTIST_SINGLES"
         
     }
+
+    private val connectionPool = okhttp3.ConnectionPool(
+    maxIdleConnections = 5,
+    keepAliveDuration = 5,
+    timeUnit = java.util.concurrent.TimeUnit.MINUTES
+    )
+
 
     fun getMusicSearcher(): PyObject? = musicSearcher
     fun getRelatedFetcher(): PyObject? = relatedFetcher
@@ -132,6 +147,7 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
             "getRelatedSongs" -> handleGetRelatedSongs(call, result)
             "getArtistSongs" -> handleGetArtistSongs(call, result)
             "getAudioUrlFlexible" -> handleGetAudioUrlFlexible(call, result)
+            "getAudioUrlFast" -> handleGetAudioUrlFast(call, result)
             "fetchLyrics" -> handleFetchLyrics(call, result)
             "getCharts" -> handleGetCharts(call, result)
             
@@ -622,15 +638,23 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                 val pyThumbQuality = getPythonThumbnailQuality(thumbQuality)
                 val pyAudioQuality = getPythonAudioQuality(audioQuality)
                 
-                val searchResults = musicSearcher!!.callAttr(
-                    "get_music_details",
-                    query,
-                    limit,
-                    pyThumbQuality,
-                    pyAudioQuality,
-                    includeAudioUrl,
-                    includeAlbumArt
-                )
+                // Use cached executor instead of creating new one
+                val searchResults = withTimeout(30_000L) {
+                    withContext(Dispatchers.IO) {
+                        val future = searchExecutor.submit<PyObject> {
+                            musicSearcher!!.callAttr(
+                                "get_music_details",
+                                query,
+                                limit,
+                                pyThumbQuality,
+                                pyAudioQuality,
+                                includeAudioUrl,
+                                includeAlbumArt
+                            )
+                        }
+                        future.get(25, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+                }
                 
                 val pythonList = python?.getBuiltins()?.callAttr("list", searchResults)
                     ?: throw Exception("Failed to convert results to list")
@@ -640,22 +664,41 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                 
                 Log.d(TAG, "Processing $count search results...")
                 
+                // Parallel processing for faster conversion
+                val itemFutures = mutableListOf<Pair<Int, java.util.concurrent.Future<Map<String, Any?>>>>()
+                
                 for (i in 0 until count) {
+                    val future = searchExecutor.submit<Map<String, Any?>> {
+                        try {
+                            val item = pythonList.callAttr("__getitem__", i)
+                            val itemMap = convertPythonDictToMap(item)
+                            
+                            mapOf(
+                                "title" to (itemMap["title"]?.toString() ?: "Unknown"),
+                                "artists" to (itemMap["artists"]?.toString() ?: "Unknown"),
+                                "videoId" to (itemMap["videoId"]?.toString() ?: ""),
+                                "duration" to itemMap["duration"]?.toString(),
+                                "year" to itemMap["year"]?.toString(),
+                                "albumArt" to itemMap["albumArt"]?.toString(),
+                                "audioUrl" to itemMap["audioUrl"]?.toString()
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error processing search result $i", e)
+                            null
+                        }
+                    }
+                    itemFutures.add(i to future)
+                }
+                
+                // Collect results in order
+                for ((index, future) in itemFutures) {
                     try {
-                        val item = pythonList.callAttr("__getitem__", i)
-                        val itemMap = convertPythonDictToMap(item)
-                        
-                        results.add(mapOf(
-                            "title" to (itemMap["title"]?.toString() ?: "Unknown"),
-                            "artists" to (itemMap["artists"]?.toString() ?: "Unknown"),
-                            "videoId" to (itemMap["videoId"]?.toString() ?: ""),
-                            "duration" to itemMap["duration"]?.toString(),
-                            "year" to itemMap["year"]?.toString(),
-                            "albumArt" to itemMap["albumArt"]?.toString(),
-                            "audioUrl" to itemMap["audioUrl"]?.toString()
-                        ))
+                        val itemResult = future.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                        if (itemResult != null) {
+                            results.add(itemResult)
+                        }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error processing search result $i", e)
+                        Log.e(TAG, "Timeout or error getting result $index", e)
                     }
                 }
                 
@@ -1084,6 +1127,72 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
         }
     }
 
+
+    private fun handleGetAudioUrlFast(call: MethodCall, result: Result) {
+        coroutineScope.launch {
+            try {
+                val videoId = call.argument<String>("videoId")
+                    ?: throw IllegalArgumentException("videoId is required")
+                
+                if (musicSearcher == null) {
+                    throw IllegalStateException("YTMusic API not initialized")
+                }
+                
+                Log.d(TAG, "⚡ Fast audio URL fetch for: $videoId")
+                
+                val audioUrl = withTimeout(3000L) {
+                    withContext(Dispatchers.IO) {
+                        val executor = Executors.newSingleThreadExecutor()
+                        try {
+                            val future = executor.submit<String?> {
+                                try {
+                                    val url = musicSearcher!!.callAttr(
+                                        "get_audio_url_fast",
+                                        videoId
+                                    )
+                                    url?.toString()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error in executor", e)
+                                    null
+                                }
+                            }
+                            
+                            future.get(2, java.util.concurrent.TimeUnit.SECONDS)
+                        } finally {
+                            executor.shutdown()
+                        }
+                    }
+                }
+                
+                withContext(Dispatchers.Main) {
+                    if (!audioUrl.isNullOrEmpty() && audioUrl != "None") {
+                        Log.d(TAG, "✅ Fast audio URL retrieved")
+                        result.success(mapOf(
+                            "success" to true,
+                            "audioUrl" to audioUrl,
+                            "videoId" to videoId
+                        ))
+                    } else {
+                        result.error(
+                            "NO_AUDIO",
+                            "No audio URL found",
+                            mapOf("success" to false, "videoId" to videoId)
+                        )
+                    }
+                }
+                
+            } catch (e: TimeoutCancellationException) {
+                withContext(Dispatchers.Main) {
+                    result.error("TIMEOUT", "Fetch timed out", null)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Fast audio fetch failed", e)
+                withContext(Dispatchers.Main) {
+                    result.error("ERROR", e.message, null)
+                }
+            }
+        }
+    }
     
     private fun handleFetchLyrics(call: MethodCall, result: Result) {
         coroutineScope.launch {

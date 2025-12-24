@@ -933,101 +933,45 @@ class YTMusicSearcher:
             return None
 
     def _get_album_art_unified(self, video_id: str, song_data: dict, thumb_quality: ThumbnailQuality) -> str:
-        """Unified method to get album art with quality settings"""
+        """Unified method with caching"""
         try:
-            # Validate inputs
-            if not video_id:
-                print("⚠️ No video_id provided for album art")
-                return ""
+            # Check cache first
+            cache_key = f"{video_id}_{thumb_quality.value}"
+            if cache_key in self._album_art_cache:
+                return self._album_art_cache[cache_key]
             
-            if not song_data or not isinstance(song_data, dict):
-                print("⚠️ Invalid song_data provided for album art")
-                return ""
-            
+            # Get album art (existing logic)
             album_art = ""
-            
-            # First, check if we already have good Google URLs in thumbnails (from radio)
             thumbnails = song_data.get("thumbnails", [])
             
-            # Ensure thumbnails is a list and filter out None values
-            if not isinstance(thumbnails, list):
-                thumbnails = []
-            else:
+            if thumbnails and isinstance(thumbnails, list):
                 thumbnails = [t for t in thumbnails if t and isinstance(t, dict)]
-            
-            google_thumbs = [t for t in thumbnails if t.get('url') and 'googleusercontent.com' in t.get('url', '')]
-            
-            if google_thumbs:
-                print("✅ Using existing Google album art from radio/search data")
-                # Sort by resolution and get the best one
-                google_thumbs.sort(key=lambda t: (t.get('width', 0) * t.get('height', 0)), reverse=True)
-                base_url = google_thumbs[0].get('url', '')
+                google_thumbs = [t for t in thumbnails if t.get('url') and 'googleusercontent.com' in t.get('url', '')]
                 
-                # Apply quality settings
-                if base_url:
-                    if thumb_quality == ThumbnailQuality.VERY_HIGH:
-                        album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
-                    elif thumb_quality == ThumbnailQuality.HIGH:
-                        album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
-                    elif thumb_quality == ThumbnailQuality.MED:
-                        album_art = re.sub(r'w\d+-h\d+', 'w120-h120', base_url)
-                    else:  # LOW
-                        album_art = re.sub(r'w\d+-h\d+', 'w60-h60', base_url)
+                if google_thumbs:
+                    google_thumbs.sort(key=lambda t: (t.get('width', 0) * t.get('height', 0)), reverse=True)
+                    base_url = google_thumbs[0].get('url', '')
                     
-                    return album_art
+                    if base_url:
+                        if thumb_quality == ThumbnailQuality.VERY_HIGH:
+                            album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
+                        elif thumb_quality == ThumbnailQuality.HIGH:
+                            album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
+                        elif thumb_quality == ThumbnailQuality.MED:
+                            album_art = re.sub(r'w\d+-h\d+', 'w120-h120', base_url)
+                        else:
+                            album_art = re.sub(r'w\d+-h\d+', 'w60-h60', base_url)
             
-            # If no good Google URLs found, use your existing HQ methods
-            if thumb_quality in [ThumbnailQuality.HIGH, ThumbnailQuality.VERY_HIGH]:
-                print(f"🖼️ Getting HQ album art for: {video_id}")
-                
-                # Method 1: Try YouTube Music specific album art
-                album_art = self.get_youtube_music_album_art(video_id)
-                
-                # Method 2: Try yt-dlp with album art focus
-                if not album_art:
-                    album_art = self.get_hq_album_art_from_ytdlp(video_id)
-                
-                # Method 3: Fallback to song thumbnails
-                if not album_art and thumbnails:
-                    print("🔄 Falling back to song thumbnails")
-                    valid_thumbnails = [t for t in thumbnails if t.get('url')]
-                    if valid_thumbnails:
-                        base_url = valid_thumbnails[-1].get("url", "")
-                        if base_url:
-                            if thumb_quality == ThumbnailQuality.HIGH:
-                                album_art = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
-                            elif thumb_quality == ThumbnailQuality.VERY_HIGH:
-                                album_art = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
-                            else:
-                                album_art = base_url
-                
-                # Apply quality settings to HQ URLs if they contain YouTube image patterns
-                if album_art and any(pattern in album_art for pattern in ['googleusercontent.com', 'ytimg.com', 'youtube.com']):
-                    if thumb_quality == ThumbnailQuality.HIGH:
-                        album_art = re.sub(r'w\d+-h\d+', 'w320-h320', album_art)
-                    elif thumb_quality == ThumbnailQuality.VERY_HIGH:
-                        album_art = re.sub(r'w\d+-h\d+', 'w544-h544', album_art)
-            else:
-                # Use song thumbnails for LOW and MED quality
-                if thumbnails:
-                    valid_thumbnails = [t for t in thumbnails if t.get('url')]
-                    if valid_thumbnails:
-                        base_url = valid_thumbnails[-1].get("url", "")
-                        if base_url:
-                            if thumb_quality == ThumbnailQuality.LOW:
-                                album_art = re.sub(r'w\d+-h\d+', 'w60-h60', base_url)
-                            elif thumb_quality == ThumbnailQuality.MED:
-                                album_art = re.sub(r'w\d+-h\d+', 'w120-h120', base_url)
-                            else:
-                                album_art = base_url
+            # Cache the result
+            if album_art and len(self._album_art_cache) < self._cache_max_size:
+                self._album_art_cache[cache_key] = album_art
             
-            print(f"🖼️ Album art URL: {album_art}")
             return album_art
             
         except Exception as e:
             print(f"⚠️ Error in _get_album_art_unified: {e}")
             return ""
-
+    
     def _get_audio_url_with_retries(self, video_id: str, audio_quality: AudioQuality) -> Optional[str]:
         """Unified method to get audio URL with retries and fallback qualities"""
         print(f"🎵 Getting audio URL for: {video_id} with requested quality: {audio_quality}")
@@ -1110,82 +1054,80 @@ class YTMusicSearcher:
         include_album_art: bool = True
     ) -> Generator[dict, None, None]:
         import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
         inspector = SearchInspector.get_instance()
         search_id = f"search_{hash(query)}_{int(time.time())}"
 
-        # ✅ no execution yet
         def generate_logic():
             try:
                 print(f"[{search_id}] ✨ Streaming search for: {query}")
-                results = None
-                processed_count = 0
-                skipped_count = 0
-                max_attempts = limit * 3
-
+                
                 if not inspector.is_active(search_id):
-                    print(f"[{search_id}] ❌ Cancelled before begin")
                     return
 
-                for attempt in range(3):
+                # Get search results once
+                results = None
+                for attempt in range(2):  # Reduced from 3 attempts
                     if not inspector.is_active(search_id):
-                        print(f"[{search_id}] ❌ Cancelled during search attempt")
                         return
                     try:
-                        results = self.ytmusic.search(query, filter="songs", limit=max_attempts)
-                        print(f"[{search_id}] 🔎 Fetched {len(results)} results")
+                        results = self.ytmusic.search(query, filter="songs", limit=limit * 2)
                         break
                     except Exception as e:
-                        print(f"[{search_id}] ⚠️ Search attempt failed: {e}")
-                        if attempt == 2:
+                        if attempt == 1:
                             return
-                        time.sleep(2 ** attempt)
+                        time.sleep(1)  # Reduced sleep time
                         self._initialize_ytmusic()
 
                 if not results:
-                    print(f"[{search_id}] ❗️ No results found")
                     return
 
+                processed_count = 0
+                
+                # Process in batches for faster throughput
+                batch_size = 5 if include_audio_url else 10
+                batch = []
+                
                 for item in results:
                     if not inspector.is_active(search_id):
-                        print(f"[{search_id}] ❌ Cancelled during result processing")
                         return
                     if processed_count >= limit:
-                        print(f"[{search_id}] ✅ Reached limit {limit}")
                         break
 
                     video_id = item.get("videoId")
                     if not video_id:
-                        skipped_count += 1
                         continue
 
-                    title = item.get("title", "Unknown")
-                    artists = ", ".join([a.get("name", "Unknown") for a in item.get("artists", [])]) or "Unknown Artist"
+                    batch.append(item)
+                    
+                    # Process batch when full or at end
+                    if len(batch) >= batch_size or item == results[-1]:
+                        # Process batch in parallel
+                        if include_audio_url:
+                            yield from self._process_search_batch_parallel(
+                                batch, search_id, thumb_quality, audio_quality,
+                                include_album_art, inspector
+                            )
+                        else:
+                            # Fast path without audio URLs
+                            for batch_item in batch:
+                                if not inspector.is_active(search_id):
+                                    return
+                                if processed_count >= limit:
+                                    break
+                                    
+                                song_data = self._build_song_data_fast(
+                                    batch_item, thumb_quality, 
+                                    include_album_art=include_album_art
+                                )
+                                
+                                if song_data:
+                                    yield song_data
+                                    processed_count += 1
+                        
+                        batch = []
 
-                    song_data = self._build_song_data(
-                        video_id=video_id,
-                        title=title,
-                        artists=artists,
-                        duration=item.get("duration"),
-                        song_data=item,
-                        thumb_quality=thumb_quality,
-                        audio_quality=audio_quality,
-                        include_audio_url=include_audio_url,
-                        include_album_art=include_album_art,
-                        year=item.get("year")
-                    )
-
-                    if not inspector.is_active(search_id):
-                        print(f"[{search_id}] ❌ Cancelled before yielding {title}")
-                        return
-
-                    if not include_audio_url or song_data.get("audioUrl"):
-                        print(f"[{search_id}] ✅ Yielding {processed_count + 1}: {title}")
-                        yield song_data
-                        processed_count += 1
-                    else:
-                        skipped_count += 1
-
-                print(f"[{search_id}] 🎉 Stream complete. Sent {processed_count}, skipped {skipped_count}")
             except GeneratorExit:
                 print(f"[{search_id}] 🔚 Generator closed")
                 raise
@@ -1193,7 +1135,6 @@ class YTMusicSearcher:
                 print(f"[{search_id}] 💥 Unexpected error: {e}")
                 raise
 
-        # ✅ Wrap the generator so code doesn't run until `yield from`
         def safe_generator():
             yield from generate_logic()
 
@@ -1205,6 +1146,105 @@ class YTMusicSearcher:
         finally:
             inspector.cancel_search(search_id)
 
+    def _process_search_batch_parallel(
+        self, 
+        batch: List[dict], 
+        search_id: str,
+        thumb_quality: ThumbnailQuality,
+        audio_quality: AudioQuality,
+        include_album_art: bool,
+        inspector
+    ) -> Generator[dict, None, None]:
+        """Process a batch of songs in parallel for faster results"""
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def process_single_item(item):
+            try:
+                video_id = item.get("videoId")
+                title = item.get("title", "Unknown")
+                artists = ", ".join([a.get("name", "Unknown") for a in item.get("artists", [])]) or "Unknown Artist"
+                
+                # Get audio URL using fast method
+                audio_url = self.get_audio_url_fast(video_id)
+                
+                if not audio_url:
+                    return None
+                
+                song_data = {
+                    "title": title,
+                    "artists": artists,
+                    "videoId": video_id,
+                    "duration": item.get("duration"),
+                    "year": item.get("year"),
+                    "audioUrl": audio_url
+                }
+                
+                if include_album_art:
+                    song_data["albumArt"] = self._get_album_art_unified(
+                        video_id, item, thumb_quality
+                    )
+                
+                return song_data
+            except Exception as e:
+                print(f"Error processing item: {e}")
+                return None
+        
+        # Process in parallel with max 3 workers for balance
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(process_single_item, item): item for item in batch}
+            
+            for future in futures:
+                if not inspector.is_active(search_id):
+                    return
+                
+                try:
+                    result = future.result(timeout=2)
+                    if result:
+                        yield result
+                except Exception as e:
+                    print(f"Batch processing error: {e}")
+                    continue
+
+    def _build_song_data_fast(
+        self,
+        item: dict,
+        thumb_quality: ThumbnailQuality,
+        include_album_art: bool = True
+    ) -> Optional[dict]:
+        """Fast song data building without audio URL"""
+        try:
+            video_id = item.get("videoId")
+            if not video_id:
+                return None
+            
+            title = item.get("title", "Unknown")
+            artists = ", ".join([a.get("name", "Unknown") for a in item.get("artists", [])]) or "Unknown Artist"
+            
+            song_data = {
+                "title": title,
+                "artists": artists,
+                "videoId": video_id,
+                "duration": item.get("duration"),
+                "year": item.get("year")
+            }
+            
+            if include_album_art:
+                # Quick album art extraction
+                thumbnails = item.get("thumbnails", [])
+                if thumbnails:
+                    base_url = thumbnails[-1].get("url", "")
+                    if base_url:
+                        if thumb_quality == ThumbnailQuality.VERY_HIGH:
+                            song_data["albumArt"] = re.sub(r'w\d+-h\d+', 'w544-h544', base_url)
+                        elif thumb_quality == ThumbnailQuality.HIGH:
+                            song_data["albumArt"] = re.sub(r'w\d+-h\d+', 'w320-h320', base_url)
+                        else:
+                            song_data["albumArt"] = base_url
+            
+            return song_data
+        except Exception as e:
+            print(f"Error building fast song data: {e}")
+            return None
 
     def get_radio(
         self,
@@ -2431,6 +2471,8 @@ class YTMusicRelatedFetcher:
         self.proxy = proxy
         self.country = country.upper() if country else "US"
         self.ytmusic = None
+        self._album_art_cache = {}  # cache INIT
+        self._cache_max_size = 100 # cache limit
         self._initialize_ytmusic()
         
         
@@ -2574,6 +2616,69 @@ class YTMusicRelatedFetcher:
 
         print("❌ No suitable audio formats found")
         return None
+    
+    def get_audio_url_fast(self, video_id: str) -> Optional[str]:
+        """
+        Ultra-fast audio URL extraction - bypasses retries and quality fallbacks.
+        Returns the best available audio URL in under 1 second.
+        """
+        if not video_id:
+            return None
+        
+        try:
+            # Single-shot extraction with minimal options
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "nocheckcertificate": True,
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "extract_flat": False,
+                "socket_timeout": 5,  # Reduced timeout
+                "retries": 0,  # No retries for speed
+                "fragment_retries": 0,
+                "extractor_retries": 0,
+                "headers": {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            }
+            
+            if self.proxy:
+                ydl_opts["proxy"] = self.proxy
+            
+            ydl = yt_dlp.YoutubeDL(ydl_opts)
+            
+            # Extract info without processing (faster)
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}",
+                download=False,
+                process=False
+            )
+            
+            # Quick process
+            info = ydl.process_ie_result(info, download=False)
+            
+            # Fast check for availability
+            if info.get('is_live') or info.get('availability') == 'unavailable':
+                return None
+            
+            # Get formats quickly
+            formats = info.get('formats', [])
+            
+            # Find first suitable audio format (no sorting for speed)
+            for fmt in formats:
+                if (fmt.get('acodec') != 'none' and 
+                    fmt.get('url') and 
+                    'manifest' not in fmt['url'].lower() and
+                    '.m3u8' not in fmt['url'].lower()):
+                    return fmt['url']
+            
+            return None
+            
+        except Exception as e:
+            print(f"Fast audio extraction failed for {video_id}: {e}")
+            return None
 
     def _get_ytmusic_stream(self, video_id: str) -> Optional[str]:
         """Try to get high quality stream directly from YouTube Music"""

@@ -117,6 +117,10 @@ class YtFlutterMusicapi {
   static bool _isInitialized = false;
   static String? _lastError;
 
+  final Map<String, List<SearchResult>> _searchCache = {};
+  final Map<String, DateTime> _cacheTimestamps = {};
+  static const _cacheDuration = Duration(minutes: 5);
+
   // Getters
   static String? get lastError => _lastError;
 
@@ -161,8 +165,32 @@ class YtFlutterMusicapi {
     AudioQuality audioQuality = AudioQuality.veryHigh,
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
+    bool useCache = true,
   }) async {
-    return _executeApiCall<List<SearchResult>>(
+    // Check cache first
+    if (useCache) {
+      final cacheKey =
+          '$query:$limit:${thumbQuality.value}:${audioQuality.value}:$includeAudioUrl:$includeAlbumArt';
+      final cachedTime = _cacheTimestamps[cacheKey];
+
+      if (cachedTime != null &&
+          DateTime.now().difference(cachedTime) < _cacheDuration) {
+        final cachedResults = _searchCache[cacheKey];
+        if (cachedResults != null) {
+          debugPrint(
+              '✅ Using cached results for: $query (${cachedResults.length} items)');
+          return YTMusicResponse<List<SearchResult>>(
+            success: true,
+            data: cachedResults,
+            count: cachedResults.length,
+            message: 'Results from cache',
+          );
+        }
+      }
+    }
+
+    // If not in cache, fetch from API
+    final response = await _executeApiCall<List<SearchResult>>(
       () async {
         try {
           final dynamic result =
@@ -195,7 +223,6 @@ class YtFlutterMusicapi {
           for (final item in resultsList) {
             try {
               if (item is Map) {
-                // Convert to Map<String, dynamic> and handle potential nulls
                 final itemMap = Map<String, dynamic>.from(item);
                 searchResults.add(SearchResult.fromMap(itemMap));
               } else {
@@ -215,6 +242,28 @@ class YtFlutterMusicapi {
         }
       },
     );
+
+    // Cache successful results
+    if (response.success && response.data != null && useCache) {
+      final cacheKey =
+          '$query:$limit:${thumbQuality.value}:${audioQuality.value}:$includeAudioUrl:$includeAlbumArt';
+      _searchCache[cacheKey] = response.data!;
+      _cacheTimestamps[cacheKey] = DateTime.now();
+
+      debugPrint('💾 Cached ${response.data!.length} results for: $query');
+
+      // Limit cache size to prevent memory issues
+      if (_searchCache.length > 50) {
+        final oldestKey = _cacheTimestamps.entries
+            .reduce((a, b) => a.value.isBefore(b.value) ? a : b)
+            .key;
+        _searchCache.remove(oldestKey);
+        _cacheTimestamps.remove(oldestKey);
+        debugPrint('🗑️ Removed oldest cache entry');
+      }
+    }
+
+    return response;
   }
 
   /// Stream search results as they are found (experimental streaming support)
@@ -225,6 +274,7 @@ class YtFlutterMusicapi {
     ThumbnailQuality thumbQuality = ThumbnailQuality.veryHigh,
     bool includeAudioUrl = true,
     bool includeAlbumArt = true,
+    void Function(int processed, int total)? onProgress,
   }) {
     final stream = YtFlutterMusicapiPlatform.instance.streamSearchResults(
       query: query,
@@ -235,7 +285,15 @@ class YtFlutterMusicapi {
       includeAlbumArt: includeAlbumArt,
     );
 
-    return stream.map((item) => SearchResult.fromMap(item));
+    var processedCount = 0;
+
+    return stream.map((item) {
+      processedCount++;
+      if (onProgress != null) {
+        onProgress(processedCount, limit);
+      }
+      return SearchResult.fromMap(item);
+    });
   }
 
   /// Gets related songs for a given track
@@ -462,6 +520,81 @@ class YtFlutterMusicapi {
         .map((item) => ArtistAlbum.fromMap(item));
   }
 
+  /// Fast audio URL fetching - optimized for speed (< 1 second)
+  /// Only returns the audio URL, no other metadata
+  Future<YTMusicResponse<String>> getAudioUrlFast({
+    required String videoId,
+  }) async {
+    return _executeApiCall<String>(() async {
+      try {
+        debugPrint('⚡ Fast fetching audio URL for: $videoId');
+
+        final response =
+            await YtFlutterMusicapiPlatform.instance.getAudioUrlFast(
+          videoId: videoId,
+        );
+
+        final responseMap = Map<String, dynamic>.from(response);
+
+        if (responseMap.containsKey('error')) {
+          debugPrint('❌ Fast audio fetch failed: ${responseMap['error']}');
+          throw PlatformException(
+            code: responseMap['errorCode']?.toString() ?? 'AUDIO_URL_ERROR',
+            message: responseMap['error']?.toString(),
+            details: responseMap,
+          );
+        }
+
+        final audioUrl = responseMap['audioUrl']?.toString() ?? '';
+        debugPrint(
+            '✅ Fast audio URL retrieved: ${audioUrl.substring(0, 50)}...');
+
+        return audioUrl;
+      } catch (e, stackTrace) {
+        debugPrint('Error in getAudioUrlFast: $e\n$stackTrace');
+        rethrow;
+      }
+    });
+  }
+
+  /// Fetch multiple audio URLs quickly in parallel
+  Future<Map<String, String?>> getAudioUrlsFastBatch({
+    required List<String> videoIds,
+  }) async {
+    debugPrint('⚡ Batch fetching ${videoIds.length} audio URLs');
+
+    final results = <String, String?>{};
+
+    // Process in parallel batches of 5
+    const batchSize = 5;
+    for (var i = 0; i < videoIds.length; i += batchSize) {
+      final batch = videoIds.skip(i).take(batchSize).toList();
+
+      final futures = batch.map((videoId) async {
+        try {
+          final response = await getAudioUrlFast(videoId: videoId);
+          return MapEntry(videoId, response.data);
+        } catch (e) {
+          debugPrint('Failed to fetch audio for $videoId: $e');
+          return MapEntry(videoId, null);
+        }
+      });
+
+      final batchResults = await Future.wait(futures);
+      results.addEntries(batchResults);
+
+      // Small delay between batches to avoid rate limiting
+      if (i + batchSize < videoIds.length) {
+        await Future.delayed(Duration(milliseconds: 100));
+      }
+    }
+
+    debugPrint(
+        '✅ Batch fetch complete: ${results.values.where((v) => v != null).length}/${videoIds.length} successful');
+
+    return results;
+  }
+
   /// Fetches lyrics for a song from YouTube Music
   ///
   /// [songName] - The name of the song to fetch lyrics for
@@ -632,6 +765,41 @@ class YtFlutterMusicapi {
         error: e.toString(),
       );
     }
+  }
+
+  /// Clear search cache
+  void clearCache() {
+    final count = _searchCache.length;
+    _searchCache.clear();
+    _cacheTimestamps.clear();
+    debugPrint('🗑️ Cleared $count cached search results');
+  }
+
+  /// Clear specific cache entry
+  void clearCacheForQuery(String query) {
+    final keysToRemove =
+        _searchCache.keys.where((key) => key.startsWith('$query:')).toList();
+
+    for (final key in keysToRemove) {
+      _searchCache.remove(key);
+      _cacheTimestamps.remove(key);
+    }
+
+    debugPrint('🗑️ Cleared ${keysToRemove.length} cached entries for: $query');
+  }
+
+  /// Get cache statistics
+  Map<String, dynamic> getCacheStats() {
+    return {
+      'totalEntries': _searchCache.length,
+      'oldestEntry': _cacheTimestamps.values.isEmpty
+          ? null
+          : _cacheTimestamps.values.reduce((a, b) => a.isBefore(b) ? a : b),
+      'newestEntry': _cacheTimestamps.values.isEmpty
+          ? null
+          : _cacheTimestamps.values.reduce((a, b) => a.isAfter(b) ? a : b),
+      'cacheDuration': _cacheDuration.inMinutes,
+    };
   }
 
   Future<ApiResponse<SystemStatus>> checkStatus() async {

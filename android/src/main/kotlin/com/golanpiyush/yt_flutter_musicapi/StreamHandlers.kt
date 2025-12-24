@@ -21,6 +21,8 @@ import kotlin.coroutines.resumeWithException
 class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventChannel.StreamHandler {
     companion object {
         const val SEARCH_TYPE = YtFlutterMusicapiPlugin.SEARCH_TYPE_SEARCH
+        const val ITEM_TIMEOUT = 10000L // Reduced from 20s to 10s
+        const val BATCH_SIZE = 3 // Process in small batches
     }
     
     private var eventSink: EventChannel.EventSink? = null
@@ -146,12 +148,12 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
         var itemCount = 0
         val cancelled = AtomicBoolean(false)
         val iterator = generator.callAttr("__iter__")
+        val resultBuffer = mutableListOf<Map<String, Any>>()
 
         while (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE) && itemCount < limit && !cancelled.get()) {
             try {
-                Log.d("YTMusicAPI", "SearchStreamHandler: Attempting to get next item ($itemCount)")
-                
-                val item = withTimeoutOrNull(20000L) {
+                // Get item with reduced timeout
+                val item = withTimeoutOrNull(ITEM_TIMEOUT) {
                     suspendCancellableCoroutine<PyObject?> { continuation ->
                         val executor = getOrCreateExecutor()
                         try {
@@ -162,7 +164,6 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                                 } catch (e: Exception) {
                                     if (e.message?.contains("StopIteration") == true || 
                                         e.toString().contains("StopIteration")) {
-                                        Log.d("YTMusicAPI", "SearchStreamHandler: StopIteration detected")
                                         continuation.resume(null)
                                     } else {
                                         continuation.resumeWithException(e)
@@ -175,62 +176,60 @@ class SearchStreamHandler(private val plugin: YtFlutterMusicapiPlugin) : EventCh
                         
                         continuation.invokeOnCancellation {
                             cancelled.set(true)
-                            Log.d("YTMusicAPI", "SearchStreamHandler: Item fetch cancelled")
                         }
                     }
                 }
                 
                 if (item == null || item.isNone) {
-                    Log.d("YTMusicAPI", "SearchStreamHandler: No more items, breaking")
                     break
                 }
                 
-                Log.d("YTMusicAPI", "SearchStreamHandler: Converting Python dict to map")
                 val songData = plugin.convertPythonDictToMap(item)
-                Log.d("YTMusicAPI", "SearchStreamHandler: Processing item: ${songData["title"]}")
                 
-                // Send result on Main thread with latest check
-                withContext(Dispatchers.Main) {
-                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
-                        events?.success(mapOf(
-                            "title" to (songData["title"]?.toString() ?: "Unknown"),
-                            "artists" to (songData["artists"]?.toString() ?: "Unknown"), 
-                            "videoId" to (songData["videoId"]?.toString() ?: ""),
-                            "duration" to (songData["duration"]?.toString() ?: ""),
-                            "year" to (songData["year"]?.toString() ?: ""),
-                            "albumArt" to (songData["albumArt"]?.toString() ?: ""),
-                            "audioUrl" to (songData["audioUrl"]?.toString() ?: "")
-                        ))
-                    }
-                }
+                // Buffer results and send in batches
+                resultBuffer.add(mapOf(
+                    "title" to (songData["title"]?.toString() ?: "Unknown"),
+                    "artists" to (songData["artists"]?.toString() ?: "Unknown"), 
+                    "videoId" to (songData["videoId"]?.toString() ?: ""),
+                    "duration" to (songData["duration"]?.toString() ?: ""),
+                    "year" to (songData["year"]?.toString() ?: ""),
+                    "albumArt" to (songData["albumArt"]?.toString() ?: ""),
+                    "audioUrl" to (songData["audioUrl"]?.toString() ?: "")
+                ))
                 
                 itemCount++
-                Log.d("YTMusicAPI", "SearchStreamHandler: Processed $itemCount items")
                 
-                // Cooperative cancellation check
-                yield()
-                
-            } catch (e: TimeoutCancellationException) {
-                Log.e("YTMusicAPI", "SearchStreamHandler: Timeout getting item $itemCount", e)
-                withContext(Dispatchers.Main) {
-                    if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
-                        events?.error("TIMEOUT_ERROR", "Request timed out getting item $itemCount", null)
+                // Send batch when full or at limit
+                if (resultBuffer.size >= BATCH_SIZE || itemCount >= limit) {
+                    withContext(Dispatchers.Main) {
+                        if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                            for (result in resultBuffer) {
+                                events?.success(result)
+                            }
+                            resultBuffer.clear()
+                        }
                     }
                 }
-                break
-            } catch (e: CancellationException) {
-                Log.d("YTMusicAPI", "SearchStreamHandler: Operation cancelled")
-                break
+                
+                yield()
+                
             } catch (e: Exception) {
-                Log.e("YTMusicAPI", "SearchStreamHandler: Error processing item $itemCount: ${e.message}", e)
-                if (itemCount == 0) {
-                    throw e
-                }
+                Log.e("YTMusicAPI", "Error processing item: ${e.message}", e)
+                if (itemCount == 0) throw e
                 continue
             }
         }
-
-        Log.d("YTMusicAPI", "SearchStreamHandler: Finished processing $itemCount items")
+        
+        // Send any remaining buffered results
+        if (resultBuffer.isNotEmpty()) {
+            withContext(Dispatchers.Main) {
+                if (plugin.searchManager.isLatestOfType(searchId!!, SEARCH_TYPE)) {
+                    for (result in resultBuffer) {
+                        events?.success(result)
+                    }
+                }
+            }
+        }
     }
 
     override fun onCancel(arguments: Any?) {

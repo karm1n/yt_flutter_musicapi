@@ -387,6 +387,17 @@ class MethodChannelYtFlutterMusicapi extends YtFlutterMusicapiPlatform {
   }
 
   @override
+  Future<Map<String, dynamic>> getAudioUrlFast({
+    required String videoId,
+  }) async {
+    final result = await _methodChannel.invokeMethod<Map<Object?, Object?>>(
+      'getAudioUrlFast',
+      {'videoId': videoId},
+    );
+    return Map<String, dynamic>.from(result ?? {});
+  }
+
+  @override
   Future<Map<String, dynamic>> fetchLyrics({
     required String songName,
     required String artistName,
