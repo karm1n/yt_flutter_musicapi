@@ -1128,7 +1128,7 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
     }
 
 
-    private fun handleGetAudioUrlFast(call: MethodCall, result: Result) {
+   private fun handleGetAudioUrlFast(call: MethodCall, result: Result) {
         coroutineScope.launch {
             try {
                 val videoId = call.argument<String>("videoId")
@@ -1140,7 +1140,9 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                 
                 Log.d(TAG, "⚡ Fast audio URL fetch for: $videoId")
                 
-                val audioUrl = withTimeout(3000L) {
+                // Use a more reasonable timeout - 5 seconds instead of 2
+                // First call might need to initialize Python, subsequent calls are faster
+                val audioUrl = withTimeout(5000L) {
                     withContext(Dispatchers.IO) {
                         val executor = Executors.newSingleThreadExecutor()
                         try {
@@ -1157,7 +1159,8 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                                 }
                             }
                             
-                            future.get(2, java.util.concurrent.TimeUnit.SECONDS)
+                            // 4 second timeout for the actual Python call
+                            future.get(4, java.util.concurrent.TimeUnit.SECONDS)
                         } finally {
                             executor.shutdown()
                         }
@@ -1173,22 +1176,41 @@ class YtFlutterMusicapiPlugin: FlutterPlugin, MethodCallHandler, CoroutineScope 
                             "videoId" to videoId
                         ))
                     } else {
+                        Log.w(TAG, "⚠️ No audio URL found")
                         result.error(
                             "NO_AUDIO",
-                            "No audio URL found",
-                            mapOf("success" to false, "videoId" to videoId)
+                            "No audio URL found for video ID: $videoId",
+                            mapOf(
+                                "success" to false, 
+                                "videoId" to videoId
+                            )
                         )
                     }
                 }
                 
             } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Fast audio fetch failed", e)
                 withContext(Dispatchers.Main) {
-                    result.error("TIMEOUT", "Fetch timed out", null)
+                    result.error(
+                        "TIMEOUT", 
+                        "Fast audio fetch timed out after 5 seconds", 
+                        mapOf(
+                            "success" to false,
+                            "error" to "timeout"
+                        )
+                    )
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Fast audio fetch failed", e)
                 withContext(Dispatchers.Main) {
-                    result.error("ERROR", e.message, null)
+                    result.error(
+                        "ERROR", 
+                        e.message ?: "Unknown error", 
+                        mapOf(
+                            "success" to false,
+                            "error" to e.message
+                        )
+                    )
                 }
             }
         }

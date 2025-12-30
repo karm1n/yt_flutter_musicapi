@@ -466,7 +466,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "3.3.5"
+    version: "3.4.0"
 sdks:
   dart: ">=3.8.1 <4.0.0"
   flutter: ">=3.27.0"

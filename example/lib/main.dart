@@ -19,7 +19,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'YouTube Music API Test',
+      title: 'YouTube Music API Tester',
       theme: ThemeData(
         primarySwatch: Colors.blue,
         brightness: Brightness.light,
@@ -1649,6 +1649,218 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
   //     });
   //   }
   // }
+  // UPDATED _testGetAudioUrlFast method for your example app
+  // Replace the previous version with this one
+
+  Future<void> _testGetAudioUrlFast() async {
+    if (!_isInitialized) {
+      _addToCliOutput('❌ API not initialized');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    _addToCliOutput('⚡ Testing getAudioUrlFast (Ultra-fast single attempt)...');
+    _addToCliOutput('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    try {
+      // Test 1: Using configured video ID
+      if (AppSettings.testVideoId.isNotEmpty) {
+        _addToCliOutput('\n🔍 Test 1: Fast fetch with Video ID');
+        _addToCliOutput('   Video ID: ${AppSettings.testVideoId}');
+
+        final stopwatch = Stopwatch()..start();
+
+        final response1 = await _api.getAudioUrlFast(
+          videoId: AppSettings.testVideoId,
+        );
+
+        stopwatch.stop();
+        _addToCliOutput('   ⏱️ Time taken: ${stopwatch.elapsedMilliseconds}ms');
+
+        if (response1.success &&
+            response1.data != null &&
+            response1.data!.isNotEmpty) {
+          _addToCliOutput('   ✅ Success!');
+          _addToCliOutput(
+            '   🔊 URL (truncated): ${response1.data!.substring(0, 50)}...',
+          );
+        } else {
+          _addToCliOutput('   ❌ Failed: ${response1.error ?? 'No URL found'}');
+        }
+      } else {
+        _addToCliOutput('⚠️ No video ID configured, skipping Test 1');
+      }
+
+      // Test 2: Batch test with multiple video IDs
+      _addToCliOutput('\n🔍 Test 2: Speed test with multiple videos');
+      final testVideoIds = [
+        '4NRXx6U8ABQ', // Blinding Lights
+        'OPf0YbXqDm0', // Mark Ronson - Uptown Funk
+        '60ItHLz5WEA', // Faded
+      ];
+
+      final overallStopwatch = Stopwatch()..start();
+      int successCount = 0;
+      int failCount = 0;
+
+      for (int i = 0; i < testVideoIds.length; i++) {
+        final videoId = testVideoIds[i];
+        _addToCliOutput(
+          '\n   📹 Video ${i + 1}/${testVideoIds.length}: $videoId',
+        );
+
+        final itemStopwatch = Stopwatch()..start();
+
+        try {
+          final response = await _api.getAudioUrlFast(videoId: videoId);
+          itemStopwatch.stop();
+
+          if (response.success &&
+              response.data != null &&
+              response.data!.isNotEmpty) {
+            successCount++;
+            _addToCliOutput(
+              '      ✅ Got URL in ${itemStopwatch.elapsedMilliseconds}ms',
+            );
+          } else {
+            failCount++;
+            _addToCliOutput(
+              '      ❌ Failed in ${itemStopwatch.elapsedMilliseconds}ms: ${response.error ?? "No URL"}',
+            );
+          }
+        } catch (e) {
+          failCount++;
+          itemStopwatch.stop();
+          _addToCliOutput(
+            '      ❌ Error in ${itemStopwatch.elapsedMilliseconds}ms: $e',
+          );
+        }
+      }
+
+      overallStopwatch.stop();
+
+      _addToCliOutput('\n📊 Batch Results:');
+      _addToCliOutput(
+        '   • Total time: ${overallStopwatch.elapsedMilliseconds}ms',
+      );
+      _addToCliOutput(
+        '   • Average: ${(overallStopwatch.elapsedMilliseconds / testVideoIds.length).toStringAsFixed(1)}ms per video',
+      );
+      _addToCliOutput('   • Success: $successCount/${testVideoIds.length}');
+      _addToCliOutput('   • Failed: $failCount/${testVideoIds.length}');
+      _addToCliOutput(
+        '   • Success rate: ${((successCount / testVideoIds.length) * 100).toStringAsFixed(1)}%',
+      );
+
+      // Test 3: Comparison with regular method
+      _addToCliOutput('\n🔍 Test 3: Speed comparison (Fast vs Flexible)');
+      final comparisonVideoId = AppSettings.testVideoId.isNotEmpty
+          ? AppSettings.testVideoId
+          : '4NRXx6U8ABQ';
+
+      _addToCliOutput('   Video ID: $comparisonVideoId');
+
+      // Fast method
+      _addToCliOutput('\n   ⚡ Testing Fast Method...');
+      final fastStopwatch = Stopwatch()..start();
+      final fastResponse = await _api.getAudioUrlFast(
+        videoId: comparisonVideoId,
+      );
+      fastStopwatch.stop();
+
+      final fastSuccess =
+          fastResponse.success &&
+          fastResponse.data != null &&
+          fastResponse.data!.isNotEmpty;
+
+      _addToCliOutput('      Time: ${fastStopwatch.elapsedMilliseconds}ms');
+      _addToCliOutput(
+        '      Result: ${fastSuccess ? "✅ Success" : "❌ Failed"}',
+      );
+      if (!fastSuccess) {
+        _addToCliOutput(
+          '      Error: ${fastResponse.error ?? "No URL returned"}',
+        );
+      }
+
+      // Regular method
+      _addToCliOutput('\n   🐢 Testing Flexible Method...');
+      final regularStopwatch = Stopwatch()..start();
+      final regularResponse = await _api.getAudioUrlFlexible(
+        videoId: comparisonVideoId,
+        audioQuality: AppSettings.audioQuality,
+      );
+      regularStopwatch.stop();
+
+      final regularSuccess =
+          regularResponse.success &&
+          regularResponse.data != null &&
+          regularResponse.data!.audioUrl != null &&
+          regularResponse.data!.audioUrl!.isNotEmpty;
+
+      _addToCliOutput('      Time: ${regularStopwatch.elapsedMilliseconds}ms');
+      _addToCliOutput(
+        '      Result: ${regularSuccess ? "✅ Success" : "❌ Failed"}',
+      );
+      if (!regularSuccess) {
+        _addToCliOutput(
+          '      Error: ${regularResponse.error ?? "No URL returned"}',
+        );
+      }
+
+      // Calculate speedup
+      if (fastSuccess &&
+          regularSuccess &&
+          fastStopwatch.elapsedMilliseconds > 0) {
+        final speedup =
+            regularStopwatch.elapsedMilliseconds /
+            fastStopwatch.elapsedMilliseconds;
+        _addToCliOutput(
+          '\n   📈 Fast method is ${speedup.toStringAsFixed(1)}x faster!',
+        );
+        _addToCliOutput(
+          '   ⚡ Time saved: ${regularStopwatch.elapsedMilliseconds - fastStopwatch.elapsedMilliseconds}ms',
+        );
+      } else if (!fastSuccess && regularSuccess) {
+        _addToCliOutput(
+          '\n   ⚠️ Fast method failed but regular method succeeded',
+        );
+        _addToCliOutput(
+          '   💡 This is expected - Fast method sacrifices reliability for speed',
+        );
+      } else if (fastSuccess && !regularSuccess) {
+        _addToCliOutput(
+          '\n   ✨ Fast method succeeded where regular method failed!',
+        );
+      } else {
+        _addToCliOutput('\n   ⚠️ Both methods failed for this video');
+      }
+
+      _addToCliOutput('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      _addToCliOutput('💡 Key Takeaways:');
+      _addToCliOutput(
+        '   • Fast method: Ultra-fast, single attempt, no retries',
+      );
+      _addToCliOutput(
+        '   • Flexible method: Slower but more reliable with retries',
+      );
+      _addToCliOutput('   • Use Fast for: Bulk processing, preview generation');
+      _addToCliOutput(
+        '   • Use Flexible for: Critical playback, guaranteed results',
+      );
+      _addToCliOutput('\n🎉 All getAudioUrlFast tests completed');
+    } catch (e) {
+      _addToCliOutput('❌ Unexpected error during tests: $e');
+      _addToCliOutput('Stack trace: ${e.toString()}');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
 
   Future<void> _fetchLyrics() async {
     if (_isLoading || !_isInitialized) {
@@ -1979,7 +2191,18 @@ class _MusicApiTestPageState extends State<MusicApiTestPage> {
                               foregroundColor: Colors.white,
                             ),
                           ),
-
+                          // ⚡ NEW BUTTON - Add this one!
+                          ElevatedButton.icon(
+                            icon: Icon(Icons.bolt),
+                            label: Text('Fast Audio URL'),
+                            onPressed: (_isLoading || !_isInitialized)
+                                ? null
+                                : _testGetAudioUrlFast,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.lightGreen,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
                           // For related songs test
                           ElevatedButton.icon(
                             icon: Icon(Icons.queue_music),

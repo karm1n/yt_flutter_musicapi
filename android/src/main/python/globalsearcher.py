@@ -521,6 +521,11 @@ class YTMusicSearcher:
         self.proxy = proxy
         self.country = country.upper() if country else "US"
         self.ytmusic = None
+
+        # ADD THESE TWO LINES - Initialize cache for album art
+        self._album_art_cache = {}  # Cache for album art URLs
+        self._cache_max_size = 100  # Maximum cache size
+        
         self._initialize_ytmusic()
         
     def _initialize_ytmusic(self):
@@ -664,6 +669,69 @@ class YTMusicSearcher:
         
     #     print("❌ No suitable audio formats found")
     #     return None
+
+    def get_audio_url_fast(self, video_id: str) -> Optional[str]:
+        """
+        Ultra-fast audio URL extraction - bypasses retries and quality fallbacks.
+        Returns the best available audio URL in under 1 second.
+        """
+        if not video_id:
+            return None
+        
+        try:
+            # Single-shot extraction with minimal options
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "nocheckcertificate": True,
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "extract_flat": False,
+                "socket_timeout": 5,  # Reduced timeout
+                "retries": 0,  # No retries for speed
+                "fragment_retries": 0,
+                "extractor_retries": 0,
+                "headers": {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            }
+            
+            if self.proxy:
+                ydl_opts["proxy"] = self.proxy
+            
+            ydl = yt_dlp.YoutubeDL(ydl_opts)
+            
+            # Extract info without processing (faster)
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}",
+                download=False,
+                process=False
+            )
+            
+            # Quick process
+            info = ydl.process_ie_result(info, download=False)
+            
+            # Fast check for availability
+            if info.get('is_live') or info.get('availability') == 'unavailable':
+                return None
+            
+            # Get formats quickly
+            formats = info.get('formats', [])
+            
+            # Find first suitable audio format (no sorting for speed)
+            for fmt in formats:
+                if (fmt.get('acodec') != 'none' and 
+                    fmt.get('url') and 
+                    'manifest' not in fmt['url'].lower() and
+                    '.m3u8' not in fmt['url'].lower()):
+                    return fmt['url']
+            
+            return None
+            
+        except Exception as e:
+            print(f"Fast audio extraction failed for {video_id}: {e}")
+            return None
 
     def get_audio_url(self, video_id: str, quality: AudioQuality = None) -> Optional[str]:
         # Define quality-based target bitrates
