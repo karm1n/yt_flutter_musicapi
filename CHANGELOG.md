@@ -5,9 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.4.1]
+
+
+## [3.4.2]
 
 `Active & Working`
+
+### Patch
+  - Patched the version of `ytmusicapi` & `YT-DLP` to their newest relases.
+
+## [3.4.1]
+
+`Errors Found - EOL`
 
 ### Fixed
   - Fixed an issue where python returns `Error processing item: 'YTMusicSearcher' object has no attribute 'get_audio_url_fast'`.
@@ -16,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.4.0]
 
-`Errors Found`
+`Errors Found - EOL`
 
 ### Added
 

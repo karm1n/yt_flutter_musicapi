@@ -16,8 +16,8 @@ import threading
 # Suppress warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-ytmv = "1.10.3" '''Latest stable version as of July 2025'''
-ytdlpv = "2025.07.21"  '''Latest stable version as of July 2025'''
+ytmv = "1.11.5" '''Latest stable version as of July 2025'''
+ytdlpv = "2026.02.04"  '''Latest stable version as of July 2025'''
 
 # For Debugging
 try:

@@ -107,11 +107,13 @@ chaquopy {
         version "3.11"
         buildPython "C:\\Python311\\python.exe"  
         pip {
-            install "yt-dlp==2025.12.08" // Latest stable version as of Dec 2025
-            install "ytmusicapi==1.11.4" // Latest stable version as of Dec 2025
+            install "yt-dlp==2026.02.04" // Latest stable version as of Feb 2026
+            install "ytmusicapi==1.11.5" // Latest stable version as of Feb 2026
         }
     }
 }
+
+
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
